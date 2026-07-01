@@ -347,6 +347,7 @@ class ChunkStepResult:
     truncations: torch.Tensor = None  # [B, 1]
     terminations: torch.Tensor = None  # [B, 1]
     rewards: torch.Tensor = None  # [B, 1]
+    env_infos: dict[str, Any] = field(default_factory=dict)
     forward_inputs: dict[str, torch.Tensor] = field(default_factory=dict)
     versions: torch.Tensor = None  # [B, 1]
 
@@ -365,6 +366,8 @@ class ChunkStepResult:
             self.truncations = self.truncations.cpu().contiguous()
         if self.rewards is not None:
             self.rewards = self.rewards.cpu().contiguous()
+        if self.env_infos:
+            self.env_infos = put_tensor_device(self.env_infos, "cpu")
         if self.forward_inputs:
             self.forward_inputs = put_tensor_device(self.forward_inputs, "cpu")
         if self.versions is not None:
@@ -389,6 +392,7 @@ class Trajectory:
     prev_values: torch.Tensor = None
     versions: torch.Tensor = None
     forward_inputs: dict[str, Any] = field(default_factory=dict)
+    env_infos: dict[str, Any] = field(default_factory=dict)
 
     curr_obs: dict[str, Any] = field(default_factory=dict)
     next_obs: dict[str, Any] = field(default_factory=dict)
@@ -497,6 +501,7 @@ class Trajectory:
                     prev_logprobs=prev_logprobs,
                     prev_values=prev_values,
                     forward_inputs=forward_inputs,
+                    env_infos=self.env_infos,
                     curr_obs=curr_obs,
                     next_obs=next_obs,
                 )
@@ -536,6 +541,7 @@ class EmbodiedRolloutResult:
     forward_inputs: list[dict[str, Any]] = field(
         default_factory=list
     )  # trajectory_length
+    env_infos: list[dict[str, Any]] = field(default_factory=list)  # trajectory_length
 
     curr_obs: list[dict[str, Any]] = field(default_factory=list)  # trajectory_length
     next_obs: list[dict[str, Any]] = field(default_factory=list)  # trajectory_length
@@ -548,6 +554,8 @@ class EmbodiedRolloutResult:
             )
         if result.rewards is not None:
             self.rewards.append(result.rewards)
+        if result.env_infos:
+            self.env_infos.append(result.env_infos)
         if result.terminations is not None:
             self.terminations.append(result.terminations)
         if result.truncations is not None:
@@ -641,6 +649,7 @@ class EmbodiedRolloutResult:
         self.prev_values.clear()
         self.versions.clear()
         self.forward_inputs.clear()
+        self.env_infos.clear()
         self.curr_obs.clear()
         self.next_obs.clear()
 
@@ -683,6 +692,8 @@ class EmbodiedRolloutResult:
                 trajectory.forward_inputs[key] = (
                     trajectory.forward_inputs[key].cpu().contiguous()
                 )
+        if len(self.env_infos) > 0:
+            trajectory.env_infos = stack_list_of_dict_tensor(self.env_infos)
 
         if len(self.curr_obs) > 0:
             trajectory.curr_obs = stack_list_of_dict_tensor(self.curr_obs)
@@ -729,6 +740,12 @@ class EmbodiedRolloutResult:
             )
             for i in range(split_size):
                 splited_trajectories[i].forward_inputs = splited_forward_inputs[i]
+        if all_trajectory.env_infos:
+            splited_env_infos = split_dict_to_chunk(
+                all_trajectory.env_infos, split_size, dim=1
+            )
+            for i in range(split_size):
+                splited_trajectories[i].env_infos = splited_env_infos[i]
 
         for field_name in all_trajectory.__dataclass_fields__.keys():
             value = getattr(all_trajectory, field_name)

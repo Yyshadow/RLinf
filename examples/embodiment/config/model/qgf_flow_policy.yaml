@@ -1,0 +1,44 @@
+model_type: qgf_flow_policy
+input_type: state
+
+state_dim: 42
+action_dim: 4
+num_action_chunks: 1
+image_size: [3, 128, 128]
+image_num: 1
+model_path: ""
+stats_path: ""
+state_normalization: none
+image_normalization: imagenet
+action_space: identity
+robotwin_delta_scale: 0.08
+robotwin_gripper_indices: null
+
+feature_dim: 256
+state_latent_dim: 64
+
+precision: "32"
+add_q_head: true
+add_value_head: false
+num_q_heads: 2
+q_hidden_dims: [256, 256, 256]
+value_hidden_dims: [256, 256, 256]
+
+denoising_steps: 4
+d_model: 128
+n_head: 4
+n_layers: 2
+flow_actor_type: QGFFlowTransformer
+use_batch_norm: false
+batch_norm_momentum: 0.99
+noise_std_head: false
+log_std_min_train: -5
+log_std_max_train: 2
+log_std_min_rollout: -20
+log_std_max_rollout: 0
+noise_std_train: 0.3
+noise_std_rollout: 0.02
+
+is_lora: false
+lora_rank: 32
+sharding_strategy: no_shard

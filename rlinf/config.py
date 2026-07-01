@@ -94,6 +94,7 @@ SupportedModel.DEXBOTIC_DM0 = SupportedModel.register("dexbotic_dm0", force=True
 SupportedModel.DREAMZERO = SupportedModel.register("dreamzero", force=True)
 SupportedModel.CNN_POLICY = SupportedModel.register("cnn_policy", force=True)
 SupportedModel.FLOW_POLICY = SupportedModel.register("flow_policy", force=True)
+SupportedModel.QGF_FLOW_POLICY = SupportedModel.register("qgf_flow_policy", force=True)
 SupportedModel.CMA_POLICY = SupportedModel.register("cma", force=True)
 SupportedModel.LINGBOTVLA = SupportedModel.register("lingbotvla", force=True)
 SupportedModel.ABOT_M0 = SupportedModel.register("abot_m0", force=True)
@@ -120,6 +121,7 @@ EMBODIED_MODEL = set(
         SupportedModel.DREAMZERO,
         SupportedModel.CNN_POLICY,
         SupportedModel.FLOW_POLICY,
+        SupportedModel.QGF_FLOW_POLICY,
         SupportedModel.CMA_POLICY,
         SupportedModel.LINGBOTVLA,
         SupportedModel.ABOT_M0,

@@ -1,0 +1,142 @@
+defaults:
+  - env/maniskill_pick_cube@env.train
+  - env/maniskill_pick_cube@env.eval
+  - model/qgf_flow_policy@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - weight_syncer/patch_syncer@weight_syncer
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: 0
+
+runner:
+  task_type: embodied
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "sac_qgf_flow_state"
+    logger_backends: ["tensorboard"]
+  max_epochs: 8000
+  max_steps: -1
+  only_eval: false
+  val_check_interval: 100
+  save_interval: -1
+
+algorithm:
+  update_epoch: 32
+  normalize_advantages: false
+  kl_penalty: kl
+  group_size: 1
+  agg_q: min
+  actor_agg_q: min
+  critic_subsample_size: 2
+  enable_drq: false
+  reward_type: action_level
+  logprob_type: action_level
+  entropy_type: action_level
+  adv_type: embodied_sac
+  loss_type: embodied_sac
+  loss_agg_func: token-mean
+  bootstrap_type: always
+  gamma: 0.8
+  tau: 0.005
+  entropy_tuning:
+    alpha_type: softplus
+    initial_alpha: 0.2
+    target_entropy: -4
+    optim:
+      lr: 3.0e-4
+      lr_scheduler: torch_constant
+      clip_grad: 10.0
+  critic_actor_ratio: 3
+  backup_entropy: true
+  replay_buffer:
+    enable_cache: true
+    cache_size: 6000
+    sample_window_size: 6000
+    min_buffer_size: 2
+    auto_save: false
+  num_updates_per_step: 64
+  target_update_freq: 1
+
+env:
+  group_name: EnvGroup
+  train:
+    rollout_epoch: 1
+    total_num_envs: 32
+    auto_reset: true
+    ignore_terminations: true
+    use_fixed_reset_state_ids: false
+    max_episode_steps: 50
+    max_steps_per_rollout_epoch: 2
+  eval:
+    rollout_epoch: 1
+    total_num_envs: 16
+    auto_reset: true
+    ignore_terminations: true
+    max_episode_steps: 50
+    max_steps_per_rollout_epoch: 50
+    use_fixed_reset_state_ids: true
+    group_size: 1
+    video_cfg:
+      save_video: true
+      video_base_dir: ${runner.logger.log_path}/video/eval
+
+rollout:
+  group_name: RolloutGroup
+  backend: huggingface
+  enable_offload: false
+  pipeline_stage_num: 1
+  collect_transitions: true
+  collect_prev_infos: false
+  model:
+    model_path: ""
+    precision: ${actor.model.precision}
+
+actor:
+  group_name: ActorGroup
+  training_backend: fsdp
+  micro_batch_size: 512
+  global_batch_size: 512
+  seed: 1234
+  enable_offload: false
+  model:
+    model_type: qgf_flow_policy
+    input_type: state
+    state_dim: 42
+    action_dim: 4
+    num_action_chunks: 1
+    precision: "32"
+    add_q_head: true
+    add_value_head: false
+    num_q_heads: 2
+  optim:
+    clip_grad: 1.0
+    lr: 3e-4
+    lr_scheduler: torch_constant
+  critic_optim:
+    clip_grad: 1.0
+    lr: 3e-4
+    lr_scheduler: torch_constant
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+reward:
+  use_reward_model: false
+
+critic:
+  use_critic_model: false

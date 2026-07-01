@@ -503,6 +503,7 @@ class MultiStepRolloutWorker(Worker):
             SupportedModel.ABOT_M0,
             SupportedModel.DREAMZERO,
             SupportedModel.CNN_POLICY,
+            SupportedModel.QGF_FLOW_POLICY,
             SupportedModel.CFG_MODEL,
         ]:
             loss_type = self.algorithm_cfg.get("loss_type", "actor")
@@ -514,6 +515,7 @@ class MultiStepRolloutWorker(Worker):
         if SupportedModel(self.model_cfg.model_type) in [
             SupportedModel.CNN_POLICY,
             SupportedModel.FLOW_POLICY,
+            SupportedModel.QGF_FLOW_POLICY,
             SupportedModel.MLP_POLICY,
         ]:
             kwargs["return_obs"] = not hasattr(self.hf_model, "q_head")

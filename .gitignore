@@ -13,6 +13,8 @@ docs/build
 dist
 logs/*
 outputs/*
+datasets/*
+!datasets/.gitkeep
 *.so
 .venv
 .docs-venv
@@ -21,3 +23,8 @@ rlinf/envs/maniskill/assets
 PKG-INFO
 *.egg-info/
 .claude/settings.json
+checkpoints/*
+logs/*
+
+.cache/
+results/

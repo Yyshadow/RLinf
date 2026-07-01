@@ -1,0 +1,173 @@
+defaults:
+  - env/robotwin_beat_block_hammer@env.train
+  - env/robotwin_beat_block_hammer@env.eval
+  - model/qgf_flow_policy@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - weight_syncer/patch_syncer@weight_syncer
+  - override hydra/job_logging: stdout
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor, env, rollout: 0
+
+runner:
+  task_type: embodied
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "robotwin_beat_block_hammer_sac_qgf_flow"
+    logger_backends: ["tensorboard"]
+  max_epochs: 8000
+  max_steps: -1
+  only_eval: false
+  val_check_interval: 50
+  save_interval: -1
+
+algorithm:
+  update_epoch: 32
+  normalize_advantages: false
+  kl_penalty: kl
+  group_size: 1
+  agg_q: min
+  actor_agg_q: min
+  critic_subsample_size: 2
+  enable_drq: false
+  reward_type: action_level
+  logprob_type: action_level
+  entropy_type: action_level
+  adv_type: embodied_sac
+  loss_type: embodied_sac
+  loss_agg_func: token-mean
+  bootstrap_type: always
+  gamma: 0.96
+  tau: 0.005
+  entropy_tuning:
+    alpha_type: softplus
+    initial_alpha: 0.2
+    target_entropy: -14
+    optim:
+      lr: 3.0e-4
+      lr_scheduler: torch_constant
+      clip_grad: 10.0
+  critic_actor_ratio: 3
+  backup_entropy: true
+  replay_buffer:
+    enable_cache: true
+    cache_size: 2000
+    sample_window_size: 2000
+    min_buffer_size: 2
+    auto_save: false
+    auto_save_path: ${runner.logger.log_path}/replay_buffer/${runner.logger.experiment_name}
+  num_updates_per_step: 32
+  target_update_freq: 1
+
+env:
+  group_name: EnvGroup
+  train:
+    rollout_epoch: 1
+    total_num_envs: 4
+    auto_reset: true
+    ignore_terminations: false
+    use_fixed_reset_state_ids: false
+    reward_coef: 5.0
+    max_episode_steps: 200
+    max_steps_per_rollout_epoch: 20
+    group_size: 1
+    assets_path: /data/wam_codebase/RoboTwin_RLinf
+    seeds_path: ${oc.env:REPO_PATH,/data/wam_codebase/RLinf}/rlinf/envs/robotwin/seeds/train_seeds.json
+    enable_offload: false
+  eval:
+    rollout_epoch: 1
+    total_num_envs: 4
+    auto_reset: true
+    ignore_terminations: true
+    reward_coef: 5.0
+    max_episode_steps: 200
+    max_steps_per_rollout_epoch: 200
+    group_size: 1
+    use_fixed_reset_state_ids: true
+    is_eval: true
+    assets_path: /data/wam_codebase/RoboTwin_RLinf
+    seeds_path: ${oc.env:REPO_PATH,/data/wam_codebase/RLinf}/rlinf/envs/robotwin/seeds/eval_seeds.json
+    video_cfg:
+      save_video: true
+      video_base_dir: ${runner.logger.log_path}/video/eval
+    enable_offload: false
+
+rollout:
+  group_name: RolloutGroup
+  backend: huggingface
+  enable_offload: false
+  pipeline_stage_num: 1
+  collect_transitions: true
+  collect_prev_infos: false
+  model:
+    model_path: ${actor.model.model_path}
+    precision: ${actor.model.precision}
+
+actor:
+  group_name: ActorGroup
+  training_backend: fsdp
+  micro_batch_size: 64
+  global_batch_size: 64
+  seed: 1234
+  enable_offload: false
+  model:
+    model_type: qgf_flow_policy
+    input_type: mixed
+    state_dim: 14
+    action_dim: 14
+    image_size: [3, 224, 224]
+    image_num: 1
+    model_path: /data/wam_codebase/RLinf-ResNet10-pretrained
+    stats_path: ""
+    state_normalization: none
+    image_normalization: imagenet
+    action_space: robotwin_delta_qpos
+    robotwin_delta_scale: [0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 1.0, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 1.0]
+    robotwin_gripper_indices: [6, 13]
+    encoder_config:
+      ckpt_name: resnet10_pretrained.pt
+    num_action_chunks: 1
+    precision: "32"
+    add_q_head: true
+    add_value_head: false
+    num_q_heads: 2
+    denoising_steps: 4
+    d_model: 128
+    n_head: 4
+    n_layers: 2
+    flow_actor_type: QGFFlowTransformer
+    noise_std_head: false
+    noise_std_train: 0.3
+    noise_std_rollout: 0.02
+  optim:
+    clip_grad: 1.0
+    lr: 3e-4
+    lr_scheduler: torch_constant
+  critic_optim:
+    clip_grad: 1.0
+    lr: 3e-4
+    lr_scheduler: torch_constant
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+reward:
+  use_reward_model: false
+
+critic:
+  use_critic_model: false

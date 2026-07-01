@@ -65,6 +65,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=OUTPUT_DIR,
         help="Directory where the visualized episode folders will be written.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["frames", "video"],
+        default="frames",
+        help="Export per-step images/text files or one mp4 plus one metadata json per episode.",
+    )
+    parser.add_argument(
+        "--camera-key",
+        default="observation.images.cam_high",
+        help="Image key used when --mode video.",
+    )
     return parser
 
 
@@ -198,6 +209,15 @@ def _write_text_file(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _decode_image_struct(image_struct: dict[str, Any], image_cls: Any) -> Any:
+    raw_bytes = image_struct.get("bytes")
+    if not raw_bytes:
+        return None
+    if isinstance(raw_bytes, memoryview):
+        raw_bytes = raw_bytes.tobytes()
+    return image_cls.open(io.BytesIO(raw_bytes)).convert("RGB")
+
+
 def _step_stem(step_idx: int, row: dict[str, Any]) -> str:
     frame_index = row.get("frame_index")
     if isinstance(frame_index, int):
@@ -286,6 +306,71 @@ def _write_episode(
     _write_text_file(episode_dir / "episode.txt", episode_payload)
 
 
+def _write_episode_video(
+    parquet_path: Path,
+    output_dir: Path,
+    rows: list[dict[str, Any]],
+    episode_meta: dict[str, Any],
+    task_map: dict[int, str],
+    dataset_info: dict[str, Any],
+    image_cls: Any,
+    camera_key: str,
+) -> None:
+    import imageio.v3 as iio
+
+    episode_index = _infer_episode_index(parquet_path, rows)
+    episode_dir = output_dir / f"episode_{episode_index:06d}"
+    episode_dir.mkdir(parents=True, exist_ok=True)
+
+    frames = []
+    steps = []
+    for step_idx, row in enumerate(rows):
+        image_struct = row.get(camera_key)
+        if not _is_image_struct(image_struct):
+            continue
+        image = _decode_image_struct(image_struct, image_cls)
+        if image is None:
+            continue
+        frames.append(image)
+        steps.append(
+            {
+                "frame_index": row.get("frame_index", step_idx),
+                "timestamp": row.get("timestamp"),
+                "reward": _json_safe(row.get("reward")),
+                "done": _json_safe(row.get("done")),
+                "success": _json_safe(row.get("success")),
+                "state": _json_safe(row.get("observation.state")),
+                "action": _json_safe(row.get("action")),
+            }
+        )
+
+    if not frames:
+        raise ValueError(f"No frames found for camera key {camera_key!r} in {parquet_path}")
+
+    fps = int(dataset_info.get("fps") or 10)
+    video_path = episode_dir / f"episode_{episode_index:06d}_{camera_key.split('.')[-1]}.mp4"
+    iio.imwrite(video_path, frames, fps=fps)
+
+    task_index = rows[0].get("task_index") if rows else None
+    metadata = {
+        "episode_index": episode_index,
+        "source_parquet": str(parquet_path),
+        "video": video_path.name,
+        "camera_key": camera_key,
+        "num_steps": len(rows),
+        "num_video_frames": len(frames),
+        "task": task_map.get(task_index),
+        "episode_meta": _json_safe(episode_meta),
+        "dataset_info": {
+            "robot_type": dataset_info.get("robot_type"),
+            "fps": fps,
+            "codebase_version": dataset_info.get("codebase_version"),
+        },
+        "steps": steps,
+    }
+    _write_text_file(episode_dir / f"episode_{episode_index:06d}.json", metadata)
+
+
 def main() -> None:
     args = _build_arg_parser().parse_args()
     dataset_path = Path(args.dataset_path).expanduser().resolve()
@@ -318,15 +403,27 @@ def main() -> None:
             continue
 
         episode_index = _infer_episode_index(parquet_path, rows)
-        _write_episode(
-            parquet_path=parquet_path,
-            output_dir=output_dir,
-            rows=rows,
-            episode_meta=episode_meta_map.get(episode_index, {}),
-            task_map=task_map,
-            dataset_info=dataset_info,
-            image_cls=image_cls,
-        )
+        if args.mode == "video":
+            _write_episode_video(
+                parquet_path=parquet_path,
+                output_dir=output_dir,
+                rows=rows,
+                episode_meta=episode_meta_map.get(episode_index, {}),
+                task_map=task_map,
+                dataset_info=dataset_info,
+                image_cls=image_cls,
+                camera_key=args.camera_key,
+            )
+        else:
+            _write_episode(
+                parquet_path=parquet_path,
+                output_dir=output_dir,
+                rows=rows,
+                episode_meta=episode_meta_map.get(episode_index, {}),
+                task_map=task_map,
+                dataset_info=dataset_info,
+                image_cls=image_cls,
+            )
         print(f"Exported episode {episode_index:06d} from {parquet_path.name}")
 
     print("Done.")

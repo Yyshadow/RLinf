@@ -989,6 +989,11 @@ class EnvWorker(Worker):
                         truncations=env_output.truncations,
                         terminations=env_output.terminations,
                         rewards=rewards,
+                        env_infos=(
+                            self._select_reward_env_infos(env_output.env_infos)
+                            if env_output.env_infos is not None
+                            else {}
+                        ),
                     )
                     self.rollout_results[stage_id].append_step_result(chunk_step_result)
                     if (

@@ -212,6 +212,7 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=False, model_type=None):
     if SupportedModel(model_type) in [
         SupportedModel.CNN_POLICY,
         SupportedModel.FLOW_POLICY,
+        SupportedModel.QGF_FLOW_POLICY,
     ]:
         from rlinf.models.embodiment.modules.resnet_utils import ResNet10
 
@@ -247,7 +248,8 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=False, model_type=None):
         policies.append(prismatic_fsdp_wrapping_policy)
 
     if (
-        SupportedModel(model_type) == SupportedModel.CNN_POLICY
+        SupportedModel(model_type)
+        in [SupportedModel.CNN_POLICY, SupportedModel.QGF_FLOW_POLICY]
         and not config.use_orig_params
     ):
         from torch.distributed.fsdp.wrap import lambda_auto_wrap_policy
