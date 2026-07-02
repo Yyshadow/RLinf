@@ -96,6 +96,11 @@ def _register_builtin_models():
 
         return get_model(cfg, torch_dtype)
 
+    def _build_lwd_critic(cfg: DictConfig, torch_dtype):
+        from rlinf.models.embodiment.lwd_critic import get_model
+
+        return get_model(cfg, torch_dtype)
+
     def _build_lingbotvla(cfg: DictConfig, torch_dtype):
         from rlinf.models.embodiment.lingbotvla import get_model
 
@@ -193,6 +198,12 @@ def _register_builtin_models():
     register_model(
         SupportedModel.QGF_FLOW_POLICY.value,
         _build_qgf_flow_policy,
+        category="embodied",
+        force=True,
+    )
+    register_model(
+        SupportedModel.LWD_CRITIC.value,
+        _build_lwd_critic,
         category="embodied",
         force=True,
     )

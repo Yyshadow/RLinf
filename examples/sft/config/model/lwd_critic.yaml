@@ -1,0 +1,33 @@
+model_type: lwd_critic
+
+precision: bf16
+
+siglip_path: /path/to/siglip2-so400m-patch14-224
+gemma3_path: /path/to/gemma-3-270m
+tokenizer_path: /path/to/gemma-3-270m
+
+critic_expert_variant: gemma_1m
+action_expert_variant: gemma_300m
+
+action_dim: 14
+action_horizon: 10
+max_token_len: 200
+max_language_len: 50
+
+freeze_vision_encoder: false
+freeze_vlm: false
+train_expert_only: false
+stop_gradient_to_vlm: false
+
+num_bins: 201
+v_min: -1.0
+v_max: 1.0
+value_dropout: 0.0
+quantile_tau: 0.6
+
+action_hidden_dim: 256
+q_hidden_dims: [512, 256, 128]
+num_q_heads: 2
+
+is_lora: false
+load_to_device: false
