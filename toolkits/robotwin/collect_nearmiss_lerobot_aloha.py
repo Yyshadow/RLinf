@@ -413,12 +413,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_nearmiss_20ep"),
+        default=Path("/data/wam_codebase/RLinf/datasets/_scratch_robotwin/beat_block_hammer_nearmiss_20ep"),
     )
     parser.add_argument(
         "--raw-output",
         type=Path,
-        default=Path("/data/wam_codebase/RLinf/datasets/robotwin_raw/beat_block_hammer_nearmiss_20ep"),
+        default=Path("/data/wam_codebase/RLinf/datasets/_scratch_robotwin_raw/beat_block_hammer_nearmiss_20ep"),
     )
     parser.add_argument(
         "--expert-root",

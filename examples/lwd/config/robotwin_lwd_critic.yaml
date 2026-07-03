@@ -1,60 +1,106 @@
-# Single-GPU smoke/train config for a LWD-style RoboTwin critic.
+# RLinf-native training config for a LWD-style RoboTwin critic.
 
-seed: 0
-device: cuda
+defaults:
+  - model/lwd_critic@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - _self_
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:REPO_PATH}/examples/sft/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: all
+
+runner:
+  task_type: sft
+  logger:
+    log_path: logs/lwd_critic
+    project_name: rlinf
+    experiment_name: robotwin_lwd_critic
+    logger_backends: ["tensorboard"]
+  max_epochs: -1
+  max_steps: 20000
+  val_check_interval: 500
+  save_interval: 2000
+  resume_dir: null
 
 data:
   train_data_paths:
-    - dataset_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_30ep
+    - dataset_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_success_520ep_dense
       weight: 1.0
-    - dataset_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_failed_20ep
+    - dataset_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_failed_520ep_dense_merged
       weight: 1.0
-    - dataset_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_nearmiss_20ep
-      weight: 2.0
-  action_horizon: 10
-  batch_size: 1
-  num_workers: 0
-  max_samples: null
+    - dataset_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_nearmiss_520ep_dense
+      weight: 1.0
+  eval_data_paths:
+    - name: beat_block_success
+      dataset_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_success_520ep_dense
+      max_samples: 2000
+    - name: beat_block_failed
+      dataset_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_failed_520ep_dense_merged
+      max_samples: 2000
+    - name: beat_block_nearmiss
+      dataset_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_nearmiss_520ep_dense
+      max_samples: 2000
+  norm_stats_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/pi05_norm_stats.json
+  use_quantile_norm: true
+  adapt_to_pi: true
+  action_horizon: 50
   image_keys:
     - cam_high
     - cam_left_wrist
     - cam_right_wrist
+  train_num_workers: 2
+  eval_num_workers: 1
+  pin_memory: true
+  prefetch_factor: 2
+  persistent_workers: true
+  balance_weights: true
+  seed: 42
 
-model:
-  model_type: lwd_critic
-  precision: bf16
-  siglip_path: /path/to/siglip2-so400m-patch14-224
-  gemma3_path: /path/to/gemma-3-270m
-  tokenizer_path: /path/to/gemma-3-270m
-  critic_expert_variant: gemma_1m
-  action_expert_variant: gemma_300m
-  action_dim: 14
-  action_horizon: ${data.action_horizon}
-  max_token_len: 200
-  freeze_vision_encoder: false
-  freeze_vlm: false
-  stop_gradient_to_vlm: false
-  num_bins: 201
-  v_min: -1.0
-  v_max: 1.0
-  quantile_tau: 0.6
-  action_hidden_dim: 256
-  q_hidden_dims: [512, 256, 128]
-  num_q_heads: 2
-  is_lora: false
-  load_to_device: false
-
-optim:
-  lr: 5.0e-4
-  weight_decay: 1.0e-6
-  gamma: 0.99
+algorithm:
+  gamma: 0.9999
   ema_tau: 0.005
   value_loss_weight: 1.0
   q_loss_weight: 1.0
-  max_grad_norm: 1.0
 
-runner:
-  max_steps: 100
-  log_interval: 10
-  save_interval: 100
-  output_dir: /data/wam_codebase/RLinf/checkpoints/lwd/robotwin_beat_block_hammer
+actor:
+  group_name: LWDCriticGroup
+  training_backend: fsdp
+  micro_batch_size: 1
+  global_batch_size: 8
+  seed: 0
+
+  optim:
+    lr: 5.0e-5
+    value_lr: 5.0e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-8
+    weight_decay: 1.0e-6
+    clip_grad: 1.0
+    lr_scheduler: constant
+    lr_warmup_steps: 0
+    total_training_steps: ${runner.max_steps}
+
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard
+    use_orig_params: true
+    gradient_checkpointing: false
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+    amp_autocast:
+      enabled: false
+      precision: bf16
+    grad_scaler:
+      enabled: false

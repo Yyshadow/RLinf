@@ -1,128 +1,234 @@
 # LWD-style Critic 接入说明
 
-本文档说明当前新增的类 LWD critic 代码边界、数据格式和后续使用方式。
+本文档说明当前类 LWD critic 的代码边界、pi0.5 对齐方式、训练数据要求和后续使用方向。
 
 ## 目标
 
-本次实现的是 LWD critic 的基础闭环，不是 ReCap 的子模块。它面向后续 pi0.5 / Flow / QGF / BPG 实验，核心形式是：
+当前实现的重点不是单独复现一个轨迹分类器，而是搭建后续 Actor-Critic 式策略后训需要的 critic 基础组件。它要能同时回答两个问题：
 
 ```text
-V(s): distributional state value
-Q(s, a_chunk): action-conditioned chunk critic
+V(s): 当前状态是否接近任务成功，整体价值是多少
+Q(s, a_chunk): 在当前状态执行某段 action chunk 的质量如何
 ```
 
-其中 `V(s)` 参考现有 ReCap value model 的 SigLIP/Gemma3 编码与 categorical value head；`Q(s, a_chunk)` 是本次新增的 action chunk critic。
+这样后续在策略优化时，critic 可以为 actor 提供比 success/fail 二值标签更细的价值评估信号。
 
-## 新增代码位置
+## 代码位置
 
 ```text
 rlinf/models/embodiment/lwd_critic/
-  lwd_critic_model.py   # LWD-style critic model: distributional V + double Q
-  lwd_loss.py           # DIVL 风格 value loss、chunk TD Q loss、EMA target update
-  __init__.py           # get_model 入口
+  lwd_critic_model.py   # distributional V(s) + action-conditioned double Q
+  lwd_loss.py           # chunk TD loss、distributional value loss、EMA target update
+  __init__.py           # model_type=lwd_critic 的 get_model 入口
 
 rlinf/data/datasets/lwd/
-  chunk_dataset.py      # 从 LeRobot-Aloha 数据构造 chunk transition
+  chunk_dataset.py      # 从 LeRobot-Aloha 数据构造 pi0.5 对齐的 chunk transition
   __init__.py
+
+rlinf/workers/sft/
+  fsdp_lwd_critic_worker.py
+                      # 使用 RLinf SFTRunner/FSDPModelManager 训练 LWD critic
 
 examples/lwd/
   train_lwd_critic.py
+  run_lwd_critic.sh
   config/robotwin_lwd_critic.yaml
-```
 
-同时在 `rlinf/config.py` 和 `rlinf/models/__init__.py` 注册了新的：
-
-```yaml
-model_type: lwd_critic
+examples/sft/config/model/lwd_critic.yaml
+  # 供 RLinf 配置系统复用的模型配置片段
 ```
 
 ## 模型结构
 
-`LWDCriticModel` 继承现有 `ValueCriticModel`，复用其 observation 编码链路：
+当前 critic 参考了 pi0.6* 相关开源实现中的 value model 思路，并复用现有 ReCap/value model 的视觉语言编码链路：
 
 ```text
-多视角图像 + task prompt
-  -> SigLIP2 vision encoder
-  -> Gemma3 language/VLM backbone
-  -> critic expert readout token
-  -> state feature z_t
+多视角图像
+  + pi0.5 风格文本 prompt:
+    "Task: ..., State: <discrete_state_bins>;\nAction: "
+        |
+        v
+SigLIP2 Vision Encoder
+        |
+        v
+Gemma3 Backbone
+        |
+        v
+Gemma-style Critic Expert readout token
+        |
+        v
+state feature z_t
+        |----------------------|
+        v                      v
+Distributional V head      ActionChunkEncoder
+V(s) distribution          a_t:t+H -> action feature
+        |                      |
+        |----------------------|
+                 v
+          Double-Q head
+          Q1(s, a_chunk), Q2(s, a_chunk)
 ```
 
-在此基础上新增：
+模型 base 是：
 
 ```text
-Distributional V head:
-  z_t -> value logits over atoms -> value mean / quantile
-
-ActionChunkEncoder:
-  a_t:t+H -> temporal attention pooling -> action feature
-
-Double Q head:
-  concat(z_t, action_feature) -> q1, q2
+SigLIP2 Vision Encoder
++ Gemma3-270M Backbone
++ Gemma-style Critic Expert
++ distributional value head
++ action chunk encoder
++ double-Q head
 ```
 
-输出包括：
+## 输入输出
+
+单个训练样本来自一个 chunk transition：
 
 ```text
-value_logits
-value_probs
-value_mean
-value_quantile
-q_values
-q_min
-```
-
-## 数据格式
-
-`LWDChunkDataset` 直接读取当前 LeRobot-Aloha 数据，例如：
-
-```text
-datasets/robotwin_aloha/beat_block_hammer_30ep
-datasets/robotwin_aloha/beat_block_hammer_failed_20ep
-datasets/robotwin_aloha/beat_block_hammer_nearmiss_20ep
-```
-
-每个样本构造成：
-
-```text
-observation
-next_observation
-action_chunk
-reward_chunk
+obs_t
+action_chunk = a_t:t+H
+reward_chunk = r_t:t+H
+next_obs = obs_t+H
 done
 success
-episode_id
-frame_idx
-source
-prompt
+task / episode_id / frame_idx / source
 ```
 
-这里的 `action_chunk` 使用数据集中已有的 action 表达。对 RoboTwin-Aloha 数据来说，关节部分应继续和 pi0.5 SFT 数据保持一致，避免 critic 和 policy 的 action 空间错位。
+collator 输出给模型的是：
+
+```text
+observation:
+  images
+  image_masks
+  tokenized_prompt
+  tokenized_prompt_mask
+
+next_observation:
+  images
+  image_masks
+  tokenized_prompt
+  tokenized_prompt_mask
+
+action_chunk:
+  [batch, horizon, action_dim]
+
+reward_chunk:
+  [batch, horizon]
+
+done:
+  [batch]
+```
+
+模型输出包括：
+
+```text
+value_logits       # V(s) 在 201 个 value atoms 上的 logits
+value_probs        # softmax 后的 value distribution
+value_mean         # distributional mean
+value_quantile     # 默认 tau=0.6 的 value quantile
+q_values           # [q1, q2]
+q_min              # min(q1, q2)
+state_features     # critic readout token hidden state z_t
+action_features    # action chunk 编码后的特征
+```
+
+## pi0.5 对齐方式
+
+当前版本把 state 和 action 都显式对齐到 pi0.5 SFT 使用的语义空间，避免 critic 和 actor 学到不同的坐标系。
+
+### State
+
+pi0.5 不使用单独的连续 StateProjector。OpenPI 源码中 pi0.5 会先把 state 归一化到近似 `[-1, 1]`，再离散成 256 个 bin，并拼进 prompt：
+
+```text
+Task: <task>, State: <bin_0> <bin_1> ... <bin_n>;
+Action:
+```
+
+当前 `LWDChunkDataset` 也采用这个方式：先用 Aloha/pi0.5 的 state 变换和 norm stats 归一化，再把离散 state 写入 prompt。因此当前 critic 的 `V(s)` 不是只看图像和任务文本，而是也能看到低维关节状态。
+
+### Action
+
+action 采用和 RoboTwin pi0.5 SFT dataconfig 一致的 delta 语义：
+
+```text
+关节维度: target_qpos - current_state_qpos
+夹爪维度: absolute gripper target
+```
+
+对应 mask 是：
+
+```text
+[6 个左臂关节 delta, 左夹爪 absolute,
+ 6 个右臂关节 delta, 右夹爪 absolute]
+```
+
+`ActionChunkEncoder` 对 `[H, action_dim]` 的 action chunk 做逐步 MLP 编码，并加入 learned timestep embedding，再通过 temporal attention pooling 得到一个 chunk-level action feature。这样 double-Q head 评估的是整段候选动作序列，而不是单步动作。
+
+### Norm Stats
+
+critic 训练依赖一份和 pi0.5 SFT 相同口径的统计量：
+
+```yaml
+data:
+  norm_stats_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/pi05_norm_stats.json
+  use_quantile_norm: true
+  adapt_to_pi: true
+```
+
+这份统计量必须在 `AlohaInputs -> DeltaActions -> Normalize` 同一语义下计算，至少包含：
+
+```text
+state:   mean / std / q01 / q99
+actions: mean / std / q01 / q99
+```
+
+如果训练时报 `norm_stats_path` 不存在，说明还没有把 pi0.5 口径的统计量生成并放到该路径。可以用 `toolkits/lerobot/calculate_norm_stats.py` 按对应 OpenPI dataconfig 生成，再把输出的 `norm_stats.json` 放到配置指定位置。
 
 ## Loss 逻辑
 
-`lwd_loss.py` 当前实现了类 DIVL 的 critic 训练基本项：
-
-```text
-reward_sum = sum_i gamma^i r_{t+i}
-target_q = reward_sum + gamma^H * (1 - done) * Quantile(V_target(s_{t+H}))
-L_Q = MSE(Q1(s_t, a_chunk), target_q) + MSE(Q2(s_t, a_chunk), target_q)
-```
-
-distributional value 的监督来自 target critic：
-
-```text
-target_v = min(Q_target1(s_t, a_chunk), Q_target2(s_t, a_chunk))
-L_V = CE(project_to_atoms(target_v), V_logits(s_t))
-```
-
-target model 使用 EMA 更新：
+当前训练使用 online critic 和 EMA target critic：
 
 ```text
 target <- (1 - tau) * target + tau * online
 ```
 
-## 单卡 smoke 训练
+chunk TD target：
+
+```text
+reward_sum = sum_i gamma^i r_{t+i}
+target_q = reward_sum + gamma^H * (1 - done) * Quantile(V_target(s_{t+H}))
+```
+
+Q loss：
+
+```text
+L_Q = MSE(Q1(s_t, a_t:t+H), target_q)
+    + MSE(Q2(s_t, a_t:t+H), target_q)
+```
+
+V loss：
+
+```text
+target_v = min(Q_target1(s_t, a_t:t+H), Q_target2(s_t, a_t:t+H))
+L_V = CE(project_to_value_atoms(target_v), V_logits(s_t))
+```
+
+默认关键超参：
+
+```yaml
+action_horizon: 50
+gamma: 0.9999
+ema_tau: 0.005
+num_bins: 201
+v_min: -0.1
+v_max: 1.1
+quantile_tau: 0.6
+```
+
+`v_min=-0.1, v_max=1.1` 给二值成功奖励附近留出少量边界，避免 value target 贴在 0/1 边缘时全部被硬截断。
+
+## RLinf-native 训练入口
 
 配置文件：
 
@@ -130,46 +236,113 @@ target <- (1 - tau) * target + tau * online
 examples/lwd/config/robotwin_lwd_critic.yaml
 ```
 
-运行前需要把以下路径改成真实模型路径：
+当前训练入口已经对齐 RLinf 的 SFT runner 路径：
 
-```yaml
-model:
-  siglip_path: /path/to/siglip2-so400m-patch14-224
-  gemma3_path: /path/to/gemma-3-270m
-  tokenizer_path: /path/to/gemma-3-270m
+```text
+Hydra config
+  -> Cluster
+  -> HybridComponentPlacement
+  -> FSDPLWDCriticWorker
+  -> SFTRunner
 ```
 
-启动命令示例：
+训练生命周期由 RLinf 管理：
+
+```text
+MetricLogger
+FSDP wrapping
+gradient accumulation
+mixed precision
+checkpoint / resume
+periodic eval
+```
+
+运行前需要把模型路径、数据路径和 norm stats 路径改成真实路径：
+
+```yaml
+actor:
+  model:
+    siglip_path: /path/to/siglip2-so400m-patch14-224
+    gemma3_path: /path/to/gemma-3-270m
+    tokenizer_path: /path/to/gemma-3-270m
+
+data:
+  train_data_paths:
+    - dataset_path: /path/to/success_lerobot_dataset
+    - dataset_path: /path/to/failed_lerobot_dataset
+  eval_data_paths:
+    - dataset_path: /path/to/eval_lerobot_dataset
+  norm_stats_path: /path/to/pi05_norm_stats.json
+```
+
+启动示例：
 
 ```bash
 cd /data/wam_codebase/RLinf
-source .venv-openpi/bin/activate
-
-export PYTHONNOUSERSITE=1
-export HF_HOME=/data/wam_codebase/RLinf/.cache/hf
-export HF_DATASETS_CACHE=/data/wam_codebase/RLinf/.cache/hf_datasets
-
-python examples/lwd/train_lwd_critic.py \
-  --config-name robotwin_lwd_critic
+bash examples/lwd/run_lwd_critic.sh robotwin_lwd_critic
 ```
 
-## 当前实现边界
+### 当前 FSDP 边界
 
-当前版本完成的是 LWD critic 的基础可运行骨架：
+LWD critic 有 EMA target critic。为了避免 FSDP flat/sharded
+parameters 和 target model 的参数语义错位，当前版本显式使用：
 
-1. 独立 `lwd_critic` 模型模块；
-2. LeRobot-Aloha chunk transition 数据读取；
-3. distributional V + action-conditioned double Q；
-4. chunk TD target、distributional value loss、EMA target critic；
-5. 单卡 smoke 训练入口。
+```yaml
+actor:
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard
+    use_orig_params: true
+```
 
-还没有接入 actor 更新、QAM、BPG 或在线 rollout 后训。建议下一步先验证 critic 质量：
+这条路径支持单卡和多卡数据并行。后续如果需要 `full_shard`，应单独实现
+sharded EMA target，而不是直接把当前配置切过去。
+
+## 本次解决的核心问题
+
+1. 补齐了 critic 的 action-conditioned Q 分支
+
+   原有 ReCap/value model 更接近 `V(s)`，当前版本新增 `Q(s, a_chunk)`，使 critic 能评估候选动作序列质量，这是后续 Actor-Critic 策略优化的基础。
+
+2. 修正了 state 没有进入 critic 语义输入的问题
+
+   当前 state 按 pi0.5 离散 state prompt 进入 tokenizer，critic 不再只依赖图像和任务语言。
+
+3. 对齐了 critic 和 pi0.5 actor 的 action 空间
+
+   action chunk 从原始 qpos target 转成 pi0.5 使用的 delta joint + absolute gripper 表达，避免后续用 critic 指导 actor 时出现动作语义错位。
+
+4. 显式化了 normalization 依赖
+
+   训练配置现在要求提供 pi0.5 口径的 `norm_stats_path`，state/action 的归一化不再隐含在代码外部，后续排查数据问题会更直接。
+
+5. 对齐了 LWD 风格 value 支撑区间和 chunk TD 训练方式
+
+   使用 201-bin distributional value head、`[-0.1, 1.1]` value support、`gamma=0.9999`、EMA target critic 和 chunk bootstrap。
+
+6. 清理并保留了必要配置字段
+
+   删除了 LWD 内部没有使用的冗余输出字段；同时保留 `is_lora: false` 这类 RLinf 公共建模入口需要的字段，避免配置看似精简但运行时报缺字段。
+
+## 当前边界
+
+当前版本是 critic 训练闭环，还没有实现：
 
 ```text
-成功轨迹 value/Q 更高；
-失败轨迹 value/Q 更低；
-near-miss 在失误附近 value/Q 下跌；
-同一状态下 expert action chunk 的 Q 高于扰动 action chunk。
+actor policy update
+online rollout 后训闭环
+自适应 action proposal / action refinement
+更复杂的 advantage 或 policy improvement 逻辑
 ```
 
-critic 曲线稳定后，再接后续的 Flow/QGF/BPG policy improvement。
+训练期间 `FSDPLWDCriticWorker.run_eval()` 会记录基础 LWD 指标。仍建议再做
+更深入的离线诊断，验证 critic 本身是否有区分能力：
+
+```text
+成功轨迹的 V/Q 整体高于失败轨迹；
+near-miss 轨迹在失误附近 V/Q 明显下降；
+同一状态下 expert action chunk 的 Q 高于扰动 action chunk；
+不同任务之间 value 曲线不出现明显尺度崩坏。
+```
+
+critic 质量稳定后，再把它接入后续 actor 更新和策略优化探索。

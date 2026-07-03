@@ -123,7 +123,7 @@ def create_lerobot_dataset(output: Path, first_frame: dict[str, Any], robot_type
         ),
         use_videos=False,
         image_writer_processes=0,
-        image_writer_threads=4,
+        image_writer_threads=int(os.environ.get("LEROBOT_IMAGE_WRITER_THREADS", "2")),
     )
 
 

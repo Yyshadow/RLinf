@@ -7,21 +7,48 @@ COLLECT=${REPO_ROOT}/toolkits/robotwin/collect_dense_lerobot_aloha.py
 DATA_ROOT=${REPO_ROOT}/datasets/robotwin_aloha
 LOG_ROOT=${REPO_ROOT}/logs/robotwin_collect_520
 TARGET_EPISODES=520
+LOCK_FILE=${DATA_ROOT}/.dense_collection.lock
+NICE_LEVEL=${NICE_LEVEL:-10}
+IONICE_CLASS=${IONICE_CLASS:-2}
+IONICE_LEVEL=${IONICE_LEVEL:-7}
 
 export PYTHONNOUSERSITE=1
+export PYTHONUNBUFFERED=1
 export MPLCONFIGDIR=/tmp/matplotlib
 export HF_HOME=${REPO_ROOT}/.cache/hf
 export HF_DATASETS_CACHE=${REPO_ROOT}/.cache/hf_datasets
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
+export MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
+export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
+export NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-1}
+export MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
 
-mkdir -p "${LOG_ROOT}"
+mkdir -p "${LOG_ROOT}" "${DATA_ROOT}"
+
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  echo "Another RobotWin dense collection is already running; lock=${LOCK_FILE}"
+  exit 1
+fi
+
+run_low_priority() {
+  local prefix=()
+  if command -v nice >/dev/null 2>&1; then
+    prefix+=(nice -n "${NICE_LEVEL}")
+  fi
+  if command -v ionice >/dev/null 2>&1; then
+    prefix+=(ionice -c "${IONICE_CLASS}" -n "${IONICE_LEVEL}")
+  fi
+  "${prefix[@]}" "$@"
+}
 
 run_step() {
   local name=$1
   shift
   echo "[$(date '+%F %T')] START ${name}"
-  "$@" 2>&1 | tee "${LOG_ROOT}/${name}.log"
+  run_low_priority "$@" 2>&1 | tee "${LOG_ROOT}/${name}.log"
   echo "[$(date '+%F %T')] DONE  ${name}"
 }
 

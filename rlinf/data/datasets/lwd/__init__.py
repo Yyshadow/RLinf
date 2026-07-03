@@ -8,6 +8,16 @@
 
 """Datasets for LWD-style chunk critic training."""
 
-from .chunk_dataset import LWDChunkDataCollator, LWDChunkDataset
+from .chunk_dataset import (
+    LWDChunkDataCollator,
+    LWDChunkDataset,
+    LWDDataLoaderImpl,
+    LWDMixtureDataset,
+)
 
-__all__ = ["LWDChunkDataCollator", "LWDChunkDataset"]
+__all__ = [
+    "LWDChunkDataCollator",
+    "LWDChunkDataset",
+    "LWDDataLoaderImpl",
+    "LWDMixtureDataset",
+]

@@ -201,7 +201,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--robotwin-root", type=Path, default=Path("/data/wam_codebase/RoboTwin_RLinf"))
     parser.add_argument("--task", default="beat_block_hammer")
     parser.add_argument("--task-config", default="demo_30")
-    parser.add_argument("--output", type=Path, default=Path("/data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer_failed_20ep"))
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("/data/wam_codebase/RLinf/datasets/_scratch_robotwin/beat_block_hammer_failed_20ep"),
+    )
     parser.add_argument("--num-episodes", type=int, default=20)
     parser.add_argument("--max-attempts", type=int, default=80)
     parser.add_argument("--steps", type=int, default=30)

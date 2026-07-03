@@ -26,6 +26,7 @@ class LWDLossOutput:
     target_q: torch.Tensor
     reward_sum: torch.Tensor
     q_min: torch.Tensor
+    q_head_gap: torch.Tensor
 
 
 def discounted_chunk_sum(reward_chunk: torch.Tensor, gamma: float) -> torch.Tensor:
@@ -81,6 +82,8 @@ def compute_lwd_losses(
     ).sum(dim=-1).mean()
 
     loss = q_loss_weight * q_loss + value_loss_weight * value_loss
+    if out.backward_anchor is not None:
+        loss = loss + out.backward_anchor
     return LWDLossOutput(
         loss=loss,
         q_loss=q_loss,
@@ -88,6 +91,7 @@ def compute_lwd_losses(
         target_q=target_q,
         reward_sum=reward_sum,
         q_min=out.q_values.min(dim=-1).values,
+        q_head_gap=out.q_values.float().std(dim=-1, unbiased=False).mean(),
     )
 
 
