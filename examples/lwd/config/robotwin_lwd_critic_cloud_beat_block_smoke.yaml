@@ -1,0 +1,30 @@
+# Fast smoke config for the cloud beat_block_hammer LWD critic job.
+
+defaults:
+  - robotwin_lwd_critic_cloud_beat_block
+  - _self_
+
+runner:
+  max_steps: 20
+  val_check_interval: 10
+  save_interval: 20
+  logger:
+    experiment_name: robotwin_lwd_critic_smoke_8a100
+
+data:
+  train_num_workers: 0
+  eval_num_workers: 0
+  eval_data_paths:
+    - name: beat_block_success
+      dataset_path: beat_block_hammer_success_eval
+      max_samples: 128
+    - name: beat_block_failed
+      dataset_path: beat_block_hammer_failed_eval
+      max_samples: 128
+    - name: beat_block_nearmiss
+      dataset_path: beat_block_hammer_nearmiss_eval
+      max_samples: 128
+
+actor:
+  micro_batch_size: 1
+  global_batch_size: 8

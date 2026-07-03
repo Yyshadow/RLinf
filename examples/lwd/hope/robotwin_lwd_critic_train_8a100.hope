@@ -1,0 +1,71 @@
+# LWD critic training on one 8x80G worker.
+
+[base]
+type = ml-easy-job
+
+[resource]
+usergroup = hadoop-uavcvml
+queue = root.zw05_training_cluster.hadoop-uavcvml.training
+
+[roles]
+workers = 1
+worker.memory = 470000
+worker.vcore = 24
+worker.gcores80g = 8
+worker.script = set -exo pipefail && \
+    source /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/Miniforge/bin/activate && \
+    conda activate rlinf_lwd && \
+    export REPO_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf && \
+    export RLINF_LWD_DATA_ROOT=${REPO_PATH}/datasets/robotwin_aloha_lwd_split && \
+    export RLINF_LWD_LOG_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd && \
+    export RLINF_SIGLIP_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/siglip2-so400m-patch14-224 && \
+    export RLINF_GEMMA3_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/gemma-3-270m && \
+    export RLINF_TOKENIZER_PATH=${RLINF_GEMMA3_PATH} && \
+    export TORCH_HOME=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/torch && \
+    export HF_HOME=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/huggingface && \
+    export TRANSFORMERS_OFFLINE=1 && \
+    export HF_HUB_OFFLINE=1 && \
+    export WANDB_MODE=offline && \
+    export TOKENIZERS_PARALLELISM=false && \
+    export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 && \
+    export NCCL_DEBUG=WARN && \
+    export RAY_DEDUP_LOGS=0 && \
+    export PYTHONPATH=${REPO_PATH}:${PYTHONPATH} && \
+    cd ${REPO_PATH} && \
+    ray stop -f || true && \
+    python -c "from transformers import AutoTokenizer; from rlinf.data.datasets.lwd.chunk_dataset import LWDChunkDataset; from rlinf.models.embodiment.lwd_critic.lwd_critic_model import LWDCriticModel; print('lwd imports ok')" && \
+    python examples/lwd/train_lwd_critic.py \
+      --config-name robotwin_lwd_critic_cloud_beat_block \
+      runner.logger.experiment_name=robotwin_lwd_critic_train_8a100
+
+[user_args]
+
+[am]
+afo.app.am.resource.mb = 4096
+
+[tensorboard]
+with.tensor.board = false
+
+[docker]
+afo.docker.image.name = registry-offlinebiz.sankuai.com/custom_prod/com.sankuai.data.hadoop.gpu/hdp-mlp/training_codelab_cuda11.8_python3.8_glibc2.28_d87cba08:v1.0.0
+
+[data]
+afo.data.prefetch=false
+
+[failover]
+afo.app.support.engine.failover = false
+afo.afo-base.image.version = master
+afo.use.hadoop.client = true
+afo.network.mode = RDMA
+
+[config]
+# config.file =
+
+[others]
+afo.app.env.YARN_CONTAINER_RUNTIME_DOCKER_SHM_SIZE_BYTES=440204000000
+afo.xm.notice.receivers.account=yangyi122
+with_requirements = false
+afo.app.yarn.allocate.timeout.seconds = 360000
+afo.use.acceleration.submission = true
+afo.use.torch=true
+afo.role.worker.gpu_driver_version=560.28.03,560.35.03,565.57.01

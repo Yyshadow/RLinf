@@ -282,6 +282,73 @@ cd /data/wam_codebase/RLinf
 bash examples/lwd/run_lwd_critic.sh robotwin_lwd_critic
 ```
 
+### 云端 beat_block 训练
+
+云端优先使用已经按 episode 切好的数据：
+
+```text
+datasets/robotwin_aloha_lwd_split/
+  beat_block_hammer_success_train
+  beat_block_hammer_success_eval
+  beat_block_hammer_failed_train
+  beat_block_hammer_failed_eval
+  beat_block_hammer_nearmiss_train
+  beat_block_hammer_nearmiss_eval
+  pi05_norm_stats.json
+```
+
+对应配置文件：
+
+```text
+examples/lwd/config/robotwin_lwd_critic_cloud_beat_block.yaml
+examples/lwd/config/robotwin_lwd_critic_cloud_beat_block_smoke.yaml
+```
+
+默认云端路径通过环境变量控制：
+
+```bash
+export REPO_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf
+export RLINF_LWD_DATA_ROOT=${REPO_PATH}/datasets/robotwin_aloha_lwd_split
+export RLINF_LWD_LOG_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd
+export RLINF_SIGLIP_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/siglip2-so400m-patch14-224
+export RLINF_GEMMA3_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/gemma-3-270m
+export RLINF_TOKENIZER_PATH=${RLINF_GEMMA3_PATH}
+```
+
+提交文件：
+
+```text
+examples/lwd/hope/robotwin_lwd_critic_smoke_8a100.hope
+examples/lwd/hope/robotwin_lwd_critic_train_8a100.hope
+```
+
+建议先跑 smoke 文件，确认 import、dataloader、FSDP 初始化和一次 eval 都能跑通；
+再提交正式训练文件。正式配置默认使用 8 卡：
+
+```yaml
+actor:
+  micro_batch_size: 2
+  global_batch_size: 16
+```
+
+如果显存充足，可以在提交命令中覆盖为：
+
+```bash
+actor.micro_batch_size=4 actor.global_batch_size=32
+```
+
+TensorBoard 是离线本地日志，事件文件和 checkpoint 都会写在：
+
+```text
+${RLINF_LWD_LOG_ROOT}/<experiment_name>/
+```
+
+恢复训练时把 `runner.resume_dir` 指向 checkpoint 的 `global_step_*` 目录，例如：
+
+```bash
+runner.resume_dir=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_2000
+```
+
 ### 当前 FSDP 边界
 
 LWD critic 有 EMA target critic。为了避免 FSDP flat/sharded

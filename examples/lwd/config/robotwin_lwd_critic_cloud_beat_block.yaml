@@ -1,0 +1,112 @@
+# RLinf-native cloud training config for beat_block_hammer LWD critic.
+
+defaults:
+  - model/lwd_critic@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - _self_
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:REPO_PATH}/examples/sft/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: all
+
+runner:
+  task_type: sft
+  logger:
+    log_path: ${oc.env:RLINF_LWD_LOG_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd}
+    project_name: rlinf
+    experiment_name: robotwin_lwd_critic_cloud_beat_block
+    logger_backends: ["tensorboard"]
+  max_epochs: -1
+  max_steps: 20000
+  val_check_interval: 500
+  save_interval: 2000
+  resume_dir: null
+
+data:
+  data_root: ${oc.env:RLINF_LWD_DATA_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf/datasets/robotwin_aloha_lwd_split}
+  train_data_paths:
+    - dataset_path: beat_block_hammer_success_train
+      weight: 1.0
+    - dataset_path: beat_block_hammer_failed_train
+      weight: 1.0
+    - dataset_path: beat_block_hammer_nearmiss_train
+      weight: 1.0
+  eval_data_paths:
+    - name: beat_block_success
+      dataset_path: beat_block_hammer_success_eval
+      max_samples: 2000
+    - name: beat_block_failed
+      dataset_path: beat_block_hammer_failed_eval
+      max_samples: 2000
+    - name: beat_block_nearmiss
+      dataset_path: beat_block_hammer_nearmiss_eval
+      max_samples: 2000
+  norm_stats_path: pi05_norm_stats.json
+  use_quantile_norm: true
+  adapt_to_pi: true
+  action_horizon: 50
+  image_keys:
+    - cam_high
+    - cam_left_wrist
+    - cam_right_wrist
+  train_num_workers: 2
+  eval_num_workers: 1
+  pin_memory: true
+  prefetch_factor: 2
+  persistent_workers: true
+  balance_weights: true
+  seed: 42
+
+algorithm:
+  gamma: 0.9999
+  ema_tau: 0.005
+  value_loss_weight: 1.0
+  q_loss_weight: 1.0
+
+actor:
+  group_name: LWDCriticGroup
+  training_backend: fsdp
+  micro_batch_size: 2
+  global_batch_size: 16
+  seed: 0
+
+  model:
+    siglip_path: ${oc.env:RLINF_SIGLIP_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/siglip2-so400m-patch14-224}
+    gemma3_path: ${oc.env:RLINF_GEMMA3_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/gemma-3-270m}
+    tokenizer_path: ${oc.env:RLINF_TOKENIZER_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/gemma-3-270m}
+
+  optim:
+    lr: 5.0e-5
+    value_lr: 5.0e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-8
+    weight_decay: 1.0e-6
+    clip_grad: 1.0
+    lr_scheduler: constant
+    lr_warmup_steps: 0
+    total_training_steps: ${runner.max_steps}
+
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard
+    use_orig_params: true
+    gradient_checkpointing: false
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+    amp_autocast:
+      enabled: false
+      precision: bf16
+    grad_scaler:
+      enabled: false
