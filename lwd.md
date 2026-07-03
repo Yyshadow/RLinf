@@ -329,12 +329,21 @@ examples/lwd/hope/robotwin_lwd_critic_train_8a100.hope
 再提交正式训练文件。正式配置默认使用 8 卡：
 
 ```yaml
+runner:
+  max_steps: 8000
+  val_check_interval: 500
+  save_interval: 2000
 actor:
   micro_batch_size: 4
-  global_batch_size: 32
+  global_batch_size: 64
+  optim:
+    lr: 5.0e-5
+    value_lr: 1.0e-4
+    lr_warmup_steps: 500
 ```
 
-如果显存充足，可以在提交命令中覆盖为：
+这对应每张卡一次处理 4 条，8 卡合计 32 条，每 2 个 micro-batch
+做一次 optimizer update。后续如果显存和吞吐都稳定，可以在提交命令中覆盖为：
 
 ```bash
 actor.micro_batch_size=8 actor.global_batch_size=64

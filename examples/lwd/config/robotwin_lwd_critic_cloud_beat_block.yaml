@@ -24,7 +24,7 @@ runner:
     experiment_name: robotwin_lwd_critic_cloud_beat_block
     logger_backends: ["tensorboard"]
   max_epochs: -1
-  max_steps: 20000
+  max_steps: 8000
   val_check_interval: 500
   save_interval: 2000
   resume_dir: null
@@ -74,7 +74,7 @@ actor:
   group_name: LWDCriticGroup
   training_backend: fsdp
   micro_batch_size: 4
-  global_batch_size: 32
+  global_batch_size: 64
   seed: 0
 
   model:
@@ -84,14 +84,14 @@ actor:
 
   optim:
     lr: 5.0e-5
-    value_lr: 5.0e-5
+    value_lr: 1.0e-4
     adam_beta1: 0.9
     adam_beta2: 0.95
     adam_eps: 1.0e-8
-    weight_decay: 1.0e-6
+    weight_decay: 1.0e-10
     clip_grad: 1.0
     lr_scheduler: constant
-    lr_warmup_steps: 0
+    lr_warmup_steps: 500
     total_training_steps: ${runner.max_steps}
 
   fsdp_config:
