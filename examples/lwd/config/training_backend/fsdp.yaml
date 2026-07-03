@@ -1,0 +1,26 @@
+strategy: fsdp
+
+sharding_strategy: full_shard
+gradient_checkpointing: false
+cpu_offload: false
+offload_pin_memory: false
+reshard_after_forward: true
+
+enable_gradient_accumulation: true
+forward_prefetch: false
+limit_all_gathers: false
+backward_prefetch: null
+use_orig_params: false
+use_liger_kernel: false
+
+mixed_precision:
+  param_dtype: null
+  reduce_dtype: null
+  buffer_dtype: null
+
+amp_autocast:
+  enabled: false
+  precision: bf16
+
+grad_scaler:
+  enabled: false

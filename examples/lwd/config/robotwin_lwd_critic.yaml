@@ -10,8 +10,6 @@ hydra:
   run:
     dir: .
   output_subdir: null
-  searchpath:
-    - file://${oc.env:REPO_PATH}/examples/sft/config/
 
 cluster:
   num_nodes: 1

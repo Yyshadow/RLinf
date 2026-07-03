@@ -33,9 +33,9 @@ examples/lwd/
   train_lwd_critic.py
   run_lwd_critic.sh
   config/robotwin_lwd_critic.yaml
-
-examples/sft/config/model/lwd_critic.yaml
-  # 供 RLinf 配置系统复用的模型配置片段
+  config/model/lwd_critic.yaml
+  config/training_backend/fsdp.yaml
+                      # LWD 自包含的模型和 FSDP 配置片段
 ```
 
 ## 模型结构
@@ -303,6 +303,9 @@ datasets/robotwin_aloha_lwd_split/
 examples/lwd/config/robotwin_lwd_critic_cloud_beat_block.yaml
 examples/lwd/config/robotwin_lwd_critic_cloud_beat_block_smoke.yaml
 ```
+
+这些 cloud 配置只依赖 `examples/lwd/config` 下的本地配置组，不需要额外
+Hydra search path 指向 `examples/sft/config`。
 
 默认云端路径通过环境变量控制：
 
