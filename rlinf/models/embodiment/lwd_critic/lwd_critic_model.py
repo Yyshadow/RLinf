@@ -123,7 +123,8 @@ class ActionChunkEncoder(nn.Module):
     def forward(self, action_chunk: Tensor) -> Tensor:
         if action_chunk.dim() == 2:
             action_chunk = action_chunk.unsqueeze(1)
-        encoded = self.step_encoder(action_chunk.float())
+        input_dtype = self.step_encoder[0].weight.dtype
+        encoded = self.step_encoder(action_chunk.to(dtype=input_dtype))
         encoded = encoded + self.time_embedding[: encoded.shape[1]].to(encoded.dtype)
         weights = torch.softmax(self.score(encoded), dim=1)
         return torch.sum(weights * encoded, dim=1)
