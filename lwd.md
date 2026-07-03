@@ -308,10 +308,10 @@ examples/lwd/config/robotwin_lwd_critic_cloud_beat_block_smoke.yaml
 
 ```bash
 export REPO_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf
-export RLINF_LWD_DATA_ROOT=${REPO_PATH}/datasets/robotwin_aloha_lwd_split
+export RLINF_LWD_DATA_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_lwd_split
 export RLINF_LWD_LOG_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd
-export RLINF_SIGLIP_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/siglip2-so400m-patch14-224
-export RLINF_GEMMA3_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/gemma-3-270m
+export RLINF_SIGLIP_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/siglip2-so400m-patch14-224
+export RLINF_GEMMA3_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/gemma-3-270m
 export RLINF_TOKENIZER_PATH=${RLINF_GEMMA3_PATH}
 ```
 
@@ -327,14 +327,14 @@ examples/lwd/hope/robotwin_lwd_critic_train_8a100.hope
 
 ```yaml
 actor:
-  micro_batch_size: 2
-  global_batch_size: 16
+  micro_batch_size: 4
+  global_batch_size: 32
 ```
 
 如果显存充足，可以在提交命令中覆盖为：
 
 ```bash
-actor.micro_batch_size=4 actor.global_batch_size=32
+actor.micro_batch_size=8 actor.global_batch_size=64
 ```
 
 TensorBoard 是离线本地日志，事件文件和 checkpoint 都会写在：

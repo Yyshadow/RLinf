@@ -32,7 +32,7 @@ runner:
   resume_dir: null
 
 data:
-  data_root: ${oc.env:RLINF_LWD_DATA_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf/datasets/robotwin_aloha_lwd_split}
+  data_root: ${oc.env:RLINF_LWD_DATA_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_lwd_split}
   train_data_paths:
     - dataset_path: beat_block_hammer_success_train
       weight: 1.0
@@ -75,14 +75,14 @@ algorithm:
 actor:
   group_name: LWDCriticGroup
   training_backend: fsdp
-  micro_batch_size: 2
-  global_batch_size: 16
+  micro_batch_size: 4
+  global_batch_size: 32
   seed: 0
 
   model:
-    siglip_path: ${oc.env:RLINF_SIGLIP_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/siglip2-so400m-patch14-224}
-    gemma3_path: ${oc.env:RLINF_GEMMA3_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/gemma-3-270m}
-    tokenizer_path: ${oc.env:RLINF_TOKENIZER_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf-pretrained/gemma-3-270m}
+    siglip_path: ${oc.env:RLINF_SIGLIP_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/siglip2-so400m-patch14-224}
+    gemma3_path: ${oc.env:RLINF_GEMMA3_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/gemma-3-270m}
+    tokenizer_path: ${oc.env:RLINF_TOKENIZER_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/gemma-3-270m}
 
   optim:
     lr: 5.0e-5
