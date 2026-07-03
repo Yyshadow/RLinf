@@ -112,6 +112,7 @@ class QHead(nn.Module):
 
         # Original simple concatenation
         x = torch.cat([state_features, action_features], dim=-1)
+        x = x.to(dtype=self.net[0].weight.dtype)
         q_values = self.net(x)
 
         return q_values

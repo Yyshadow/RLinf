@@ -1,16 +1,16 @@
 strategy: fsdp
 
-sharding_strategy: full_shard
+sharding_strategy: no_shard
 gradient_checkpointing: false
 cpu_offload: false
 offload_pin_memory: false
-reshard_after_forward: true
+reshard_after_forward: false
 
 enable_gradient_accumulation: true
 forward_prefetch: false
 limit_all_gathers: false
 backward_prefetch: null
-use_orig_params: false
+use_orig_params: true
 use_liger_kernel: false
 
 mixed_precision:

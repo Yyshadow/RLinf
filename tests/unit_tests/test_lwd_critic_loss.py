@@ -10,8 +10,12 @@
 
 import torch
 
-from rlinf.models.embodiment.lwd_critic.lwd_critic_model import LWDCriticModel
+from rlinf.models.embodiment.lwd_critic.lwd_critic_model import (
+    ActionChunkEncoder,
+    LWDCriticModel,
+)
 from rlinf.models.embodiment.lwd_critic.lwd_loss import discounted_chunk_sum
+from rlinf.models.embodiment.modules.q_head import MultiQHead
 
 
 def test_discounted_chunk_sum_batches_rewards() -> None:
@@ -43,3 +47,30 @@ def test_scalar_targets_to_categorical_projects_and_clamps() -> None:
     )
     torch.testing.assert_close(projected, expected)
     torch.testing.assert_close(projected.sum(dim=-1), torch.ones(targets.shape[0]))
+
+
+def test_q_from_state_action_matches_head_dtype() -> None:
+    critic = LWDCriticModel.__new__(LWDCriticModel)
+    critic.action_encoder = ActionChunkEncoder(
+        action_dim=4,
+        hidden_dim=8,
+        action_horizon=3,
+    ).to(dtype=torch.float64)
+    critic.q_head = MultiQHead(
+        hidden_size=6,
+        action_feature_dim=8,
+        hidden_dims=[8],
+        num_q_heads=2,
+    ).to(dtype=torch.float64)
+
+    state_features = torch.randn(2, 6, dtype=torch.float32)
+    action_chunk = torch.randn(2, 3, 4, dtype=torch.float32)
+
+    q_values, action_features = critic.q_from_state_action(
+        state_features,
+        action_chunk,
+    )
+
+    assert q_values.dtype == torch.float32
+    assert action_features.dtype == torch.float64
+    assert q_values.shape == (2, 2)

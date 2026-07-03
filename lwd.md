@@ -315,7 +315,7 @@ export RLINF_LWD_DATA_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/ya
 export RLINF_LWD_LOG_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd
 export RLINF_SIGLIP_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/siglip2-so400m-patch14-224
 export RLINF_GEMMA3_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/gemma-3-270m
-export RLINF_TOKENIZER_PATH=${RLINF_GEMMA3_PATH}
+export RLINF_TOKENIZER_PATH=$RLINF_GEMMA3_PATH
 ```
 
 提交文件：
@@ -340,7 +340,13 @@ actor:
 actor.micro_batch_size=8 actor.global_batch_size=64
 ```
 
-TensorBoard 是离线本地日志，事件文件和 checkpoint 都会写在：
+TensorBoard 是离线本地日志。当前 RLinf `MetricLogger` 会把事件文件写到：
+
+```text
+${RLINF_LWD_LOG_ROOT}/tensorboard/
+```
+
+checkpoint 会按实验名写在：
 
 ```text
 ${RLINF_LWD_LOG_ROOT}/<experiment_name>/
