@@ -21,6 +21,7 @@ worker.script = set -exo pipefail && \
     export RLINF_PI05_MODEL_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf_pi05_pytorch/pi05_base_hammer50 && \
     export RLINF_PI05_NORM_STATS_PATH=$RLINF_PI05_DATA_ROOT/beat_block_hammer_success_50_train/norm_stats.json && \
     export RLINF_PI05_LOG_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft && \
+    export OPENPI_DATA_HOME=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights && \
     export TORCH_HOME=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/torch && \
     export HF_HOME=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/huggingface && \
     export HF_DATASETS_CACHE=$HF_HOME/datasets && \
@@ -34,6 +35,7 @@ worker.script = set -exo pipefail && \
     export PYTHONPATH=$REPO_PATH:$PYTHONPATH && \
     cd $REPO_PATH && \
     (ray stop -f || true) && \
+    python -c "from pathlib import Path; import os; p = Path(os.environ['OPENPI_DATA_HOME']) / 'big_vision' / 'paligemma_tokenizer.model'; assert p.is_file(), f'missing OpenPI tokenizer cache: {p}'" && \
     python -c "import openpi, lerobot; from transformers import AutoTokenizer; from rlinf.models.embodiment.openpi import get_model; print('pi05 sft imports ok')" && \
     python examples/sft/train_vla_sft.py \
       --config-name robotwin_sft_openpi_pi05_hammer50_cloud \

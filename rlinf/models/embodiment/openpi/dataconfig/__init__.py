@@ -15,6 +15,7 @@
 
 import dataclasses
 import difflib
+import pathlib
 from typing import Optional
 
 import openpi.models.pi0_config as pi0_config
@@ -23,6 +24,7 @@ import openpi.training.weight_loaders as weight_loaders
 from openpi.training.config import (
     AssetsConfig,
     DataConfig,
+    DataConfigFactory,
     TrainConfig,
 )
 
@@ -482,12 +484,36 @@ def _override_with_data_kwargs(config: TrainConfig, data_kwargs: dict) -> TrainC
     return dataclasses.replace(config, **replace_kwargs)
 
 
+def _override_with_norm_stats_path(
+    config: TrainConfig, norm_stats_path: str
+) -> TrainConfig:
+    """Return a copy whose data config loads norm stats from an explicit file."""
+    data_config = config.data
+    if (
+        not isinstance(data_config, DataConfigFactory)
+        or not dataclasses.is_dataclass(data_config)
+        or not hasattr(data_config, "assets")
+    ):
+        raise ValueError("OpenPI norm_stats_path requires a dataclass data config.")
+
+    path = pathlib.Path(str(norm_stats_path))
+    stats_dir = path.parent if path.name == "norm_stats.json" else path
+    assets = dataclasses.replace(
+        data_config.assets,
+        assets_dir=str(stats_dir),
+        asset_id=".",
+    )
+    data_config = dataclasses.replace(data_config, assets=assets)
+    return dataclasses.replace(config, data=data_config)
+
+
 def get_openpi_config(
     config_name: str,
     model_path: Optional[str] = None,
     batch_size: Optional[int] = None,
     repo_id: Optional[str] = None,
     data_kwargs: Optional[dict] = None,
+    norm_stats_path: Optional[str] = None,
 ) -> TrainConfig:
     """Get a config by name.
 
@@ -498,6 +524,7 @@ def get_openpi_config(
         repo_id: Optional LeRobot repo_id or local data path to override.
             When using a local path, the original asset_id is preserved so
             that norm_stats can still be loaded from the model checkpoint.
+        norm_stats_path: Optional explicit norm_stats.json file or directory.
     """
     if config_name not in _CONFIGS_DICT:
         closest = difflib.get_close_matches(
@@ -519,5 +546,7 @@ def get_openpi_config(
         new_assets = dataclasses.replace(config.data.assets, asset_id=original_repo_id)
         new_data = dataclasses.replace(config.data, repo_id=repo_id, assets=new_assets)
         config = dataclasses.replace(config, data=new_data)
+    if norm_stats_path is not None:
+        config = _override_with_norm_stats_path(config, norm_stats_path)
 
     return config

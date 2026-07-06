@@ -38,8 +38,12 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     # config
     config_name = getattr(cfg.openpi, "config_name", None)
     data_kwargs = getattr(cfg, "openpi_data", None)
+    norm_stats_path = getattr(cfg.openpi, "norm_stats_path", None)
     actor_train_config = get_openpi_config(
-        config_name, model_path=cfg.model_path, data_kwargs=data_kwargs
+        config_name,
+        model_path=cfg.model_path,
+        data_kwargs=data_kwargs,
+        norm_stats_path=norm_stats_path,
     )
 
     actor_model_config = actor_train_config.model
@@ -95,7 +99,6 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     data_config = actor_train_config.data.create(
         actor_train_config.assets_dirs, actor_model_config
     )
-    norm_stats_path = actor_model_config.norm_stats_path
     if norm_stats_path is not None:
         norm_stats_path = Path(str(norm_stats_path))
         norm_stats_dir = (

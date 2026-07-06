@@ -412,9 +412,10 @@ actor:
       norm_stats_path: /path/to/beat_block_hammer_success_50_train/norm_stats.json
 ```
 
-如果设置了 `norm_stats_path`，模型初始化会直接读取这份训练集统计量；如果不设置，
-仍然兼容旧逻辑，从 `model_path/<asset_id>/norm_stats.json` 读取。这样可以避免
-把数据集统计量强行塞进 base model 目录。
+如果设置了 `norm_stats_path`，模型 wrapper 和 OpenPI SFT dataloader 都会读取
+这份训练集统计量；如果不设置，仍然兼容旧逻辑，从
+`model_path/<asset_id>/norm_stats.json` 读取。这样可以避免把数据集统计量强行塞进
+base model 目录。
 
 对应配置文件：
 
@@ -457,7 +458,27 @@ export RLINF_PI05_DATA_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/y
 export RLINF_PI05_MODEL_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf_pi05_pytorch/pi05_base_hammer50
 export RLINF_PI05_NORM_STATS_PATH=$RLINF_PI05_DATA_ROOT/beat_block_hammer_success_50_train/norm_stats.json
 export RLINF_PI05_LOG_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft
+export OPENPI_DATA_HOME=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights
 ```
+
+OpenPI 的 pi0/pi0.5 文本 tokenizer 不是 HuggingFace tokenizer，而是 Big Vision
+的 PaliGemma SentencePiece 文件。OpenPI 默认会从：
+
+```text
+gs://big_vision/paligemma_tokenizer.model
+```
+
+下载并缓存到：
+
+```text
+${OPENPI_DATA_HOME}/big_vision/paligemma_tokenizer.model
+```
+
+云端离线训练前必须提前准备这个文件。它是一个 tokenizer asset，不是新的 pi0.5
+模型权重。可以在有网络的环境先下载一次，再上传到云端对应路径；也可以如果之前
+OpenPI 训练已经用同一个 `OPENPI_DATA_HOME` 跑通过，直接复用已有缓存。当前
+hammer50 smoke/train hope 会在启动训练前检查这个文件是否存在，缺失时直接报错，
+避免训练时再尝试访问 Google Cloud。
 
 提交文件：
 
@@ -533,7 +554,7 @@ sharded EMA target，而不是直接把当前配置切过去。
 
 7. 解耦了 pi0.5 base 权重和数据集统计量
 
-   OpenPI 模型配置新增 `openpi.norm_stats_path`，quick SFT 可以直接读取训练集生成的 `norm_stats.json`。base model 目录不再必须承担数据集统计量职责，云端切换数据集时只需要改配置或环境变量。
+   OpenPI 模型配置新增 `openpi.norm_stats_path`，模型 wrapper 和 SFT dataloader 会使用同一份训练集 `norm_stats.json`。base model 目录不再必须承担数据集统计量职责，云端切换数据集时只需要改配置或环境变量。
 
 8. 补齐了 pi0.5 hammer50 quick SFT 云端入口
 
