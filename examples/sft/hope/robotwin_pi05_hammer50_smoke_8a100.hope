@@ -39,9 +39,11 @@ worker.script = set -exo pipefail && \
     python -c "import openpi, lerobot; from transformers import AutoTokenizer; from rlinf.models.embodiment.openpi import get_model; print('pi05 sft imports ok')" && \
     python examples/sft/train_vla_sft.py \
       --config-name robotwin_sft_openpi_pi05_hammer50_cloud \
-      runner.max_steps=50 \
-      runner.save_interval=50 \
-      runner.logger.experiment_name=pi05_hammer50_expert_only_smoke
+      actor.micro_batch_size=1 \
+      actor.global_batch_size=8 \
+      runner.max_steps=10 \
+      runner.save_interval=10 \
+      runner.logger.experiment_name=pi05_hammer50_full_smoke10
 
 [user_args]
 

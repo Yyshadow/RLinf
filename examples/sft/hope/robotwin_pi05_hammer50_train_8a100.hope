@@ -38,7 +38,8 @@ worker.script = set -exo pipefail && \
     python -c "from pathlib import Path; import os; p = Path(os.environ['OPENPI_DATA_HOME']) / 'big_vision' / 'paligemma_tokenizer.model'; assert p.is_file(), f'missing OpenPI tokenizer cache: {p}'" && \
     python -c "import openpi, lerobot; from transformers import AutoTokenizer; from rlinf.models.embodiment.openpi import get_model; print('pi05 sft imports ok')" && \
     python examples/sft/train_vla_sft.py \
-      --config-name robotwin_sft_openpi_pi05_hammer50_cloud
+      --config-name robotwin_sft_openpi_pi05_hammer50_cloud \
+      runner.logger.experiment_name=pi05_hammer50_full_train
 
 [user_args]
 
