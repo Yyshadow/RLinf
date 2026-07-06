@@ -1,4 +1,4 @@
-# Cloud SFT config for quick pi0.5 finetuning on 50 beat_block_hammer successes.
+# Cloud SFT config for overfitting pi0.5 on 50 beat_block_hammer successes.
 
 defaults:
   - model/pi0_5@actor.model
@@ -23,12 +23,12 @@ runner:
   logger:
     log_path: ${oc.env:RLINF_PI05_LOG_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft}
     project_name: rlinf
-    experiment_name: pi05_hammer50_full_train
+    experiment_name: pi05_hammer50_overfit50_10k_v1
     logger_backends: ["tensorboard"]
   max_epochs: -1
-  max_steps: 500
+  max_steps: 10000
   val_check_interval: -1
-  save_interval: 100
+  save_interval: 1000
   resume_dir: null
 
 data:
@@ -37,8 +37,8 @@ data:
 actor:
   group_name: ActorGroup
   training_backend: fsdp
-  micro_batch_size: 2
-  global_batch_size: 16
+  micro_batch_size: 4
+  global_batch_size: 64
   seed: 0
 
   model:
@@ -52,22 +52,23 @@ actor:
       norm_stats_path: ${oc.env:RLINF_PI05_NORM_STATS_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_pi05_quick/beat_block_hammer_success_50_train/norm_stats.json}
       detach_critic_input: true
       num_images_in_input: 3
+      noise_level: 0.5
       # pi0.5 SFT expert-only currently hits an OpenPI/FSDP
-      # view-inplace error, so the cloud quick run uses full finetuning.
+      # view-inplace error, so the cloud hammer50 run uses full finetuning.
       train_expert_only: false
 
   optim:
-    lr: 7.5e-6
+    lr: 2.5e-5
     adam_beta1: 0.9
     adam_beta2: 0.95
     adam_eps: 1.0e-8
-    weight_decay: 0.01
+    weight_decay: 1.0e-10
     clip_grad: 1.0
     total_training_steps: ${runner.max_steps}
-    lr_warmup_steps: 50
+    lr_warmup_steps: 500
     lr_scheduler: cosine
     num_cycles: 0.5
-    min_lr: 7.5e-7
+    min_lr: 2.5e-6
 
   fsdp_config:
     strategy: fsdp

@@ -378,13 +378,13 @@ ${RLINF_LWD_LOG_ROOT}/<experiment_name>/
 runner.resume_dir=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_2000
 ```
 
-### pi0.5 hammer50 quick SFT
+### pi0.5 hammer50 50 条数据 SFT
 
 这一部分训练的是 pi0.5 actor，不是 LWD critic，所以入口放在 `examples/sft`。
-它用于用少量 hammer 成功数据快速得到一个可用的 actor 初始化，再和 critic
-训练结果一起做后续策略优化实验。
+它用于用少量 hammer 成功数据先做 actor 过拟合诊断，确认训练链路、数据统计量、
+闭环评估和视频诊断都可靠，再和 critic 训练结果一起做后续策略优化实验。
 
-当前 quick SFT 使用 50 条 `beat_block_hammer` 成功 episode：
+当前 SFT 使用 50 条 `beat_block_hammer` 成功 episode：
 
 ```text
 /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_pi05_quick/
@@ -427,27 +427,40 @@ examples/sft/config/robotwin_sft_openpi_pi05_hammer50_cloud.yaml
 
 ```yaml
 runner:
-  max_steps: 1000
+  max_steps: 10000
   val_check_interval: -1
-  save_interval: 200
+  save_interval: 1000
+  logger:
+    experiment_name: pi05_hammer50_overfit50_10k_v1
 
 actor:
   micro_batch_size: 4
-  global_batch_size: 32
+  global_batch_size: 64
   model:
     num_action_chunks: 50
     action_dim: 14
     openpi:
       config_name: pi05_aloha_robotwin
-      train_expert_only: true
+      train_expert_only: false
+      noise_level: 0.5
       num_images_in_input: 3
       detach_critic_input: true
+  optim:
+    lr: 2.5e-5
+    min_lr: 2.5e-6
+    weight_decay: 1.0e-10
+    lr_warmup_steps: 500
 ```
 
-`train_expert_only: true` 表示只训练 OpenPI action expert，冻结 VLM。对于几十条
-success demo 的快速验证，这比全量微调更稳，也更省显存。8 卡下
-`micro_batch_size=4, global_batch_size=32` 表示每张卡一次处理 4 条，8 卡合计
-32 条后做一次 optimizer update。
+这里采用 `train_expert_only: false`，也就是 full finetuning。原因是当前
+RLinf + OpenPI pi0.5 + FSDP SFT 的 expert-only 路径会触发 Gemma expert
+view/inplace autograd 报错；在没有代码级修复前，full finetuning 是稳定方案。
+8 卡下 `micro_batch_size=4, global_batch_size=64` 表示每张卡一次处理 4 条，
+全局累计到 64 条后做一次 optimizer update。
+
+这次不是从 `global_step_500` resume，而是从 `pi05_base_hammer50` base package
+重新启动新实验。旧 500-step run 的学习率和 cosine schedule 都是短训练设置，
+直接 resume 会继承旧 optimizer/scheduler 状态，不适合作为 10k overfit 实验起点。
 
 默认云端路径通过环境变量控制：
 
@@ -494,7 +507,7 @@ hope run examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope
 ```
 
 确认 import、OpenPI dataloader、FSDP 初始化和 checkpoint 保存都通过后，再提交正式
-1000-step quick SFT：
+10k-step overfit SFT：
 
 ```bash
 hope run examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope
@@ -506,9 +519,10 @@ checkpoint 会保存到：
 ${RLINF_PI05_LOG_ROOT}/<experiment_name>/checkpoints/global_step_<N>/actor
 ```
 
-当前 embodied SFT worker 没有实现单独 eval，所以 quick SFT 主要看
-`train/loss` 是否下降、checkpoint 是否正常保存，以及后续用 rollout/eval
-脚本验证真实任务成功率。
+当前 embodied SFT worker 没有实现单独 eval，所以 SFT 训练中主要看
+`train/loss` 是否继续下降、checkpoint 是否每 1000 step 正常保存。闭环效果需要
+后续用 rollout/eval 脚本验证；建议先用训练集 seeds 做 `total_num_envs<=4` 的快速
+评估，再对候选 checkpoint 开启 `record_chunk_frames=true` 生成完整视频。
 
 ### 当前 FSDP 边界
 

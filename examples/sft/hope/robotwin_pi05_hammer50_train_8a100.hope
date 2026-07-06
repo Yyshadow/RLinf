@@ -1,4 +1,4 @@
-# pi0.5 hammer50 SFT training on one 8x80G worker.
+# pi0.5 hammer50 10k-step overfit SFT on one 8x80G worker.
 
 [base]
 type = ml-easy-job
@@ -39,7 +39,17 @@ worker.script = set -exo pipefail && \
     python -c "import openpi, lerobot; from transformers import AutoTokenizer; from rlinf.models.embodiment.openpi import get_model; print('pi05 sft imports ok')" && \
     python examples/sft/train_vla_sft.py \
       --config-name robotwin_sft_openpi_pi05_hammer50_cloud \
-      runner.logger.experiment_name=pi05_hammer50_full_train
+      runner.max_steps=10000 \
+      runner.save_interval=1000 \
+      actor.micro_batch_size=4 \
+      actor.global_batch_size=64 \
+      actor.optim.lr=2.5e-5 \
+      actor.optim.min_lr=2.5e-6 \
+      actor.optim.weight_decay=1.0e-10 \
+      actor.optim.lr_warmup_steps=500 \
+      actor.model.openpi.noise_level=0.5 \
+      actor.model.openpi.train_expert_only=false \
+      runner.logger.experiment_name=pi05_hammer50_overfit50_10k_v1
 
 [user_args]
 
