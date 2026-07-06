@@ -14,6 +14,7 @@
 # openpi model configs
 
 import os
+from pathlib import Path
 
 import torch
 from omegaconf import DictConfig
@@ -23,6 +24,7 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     import glob
 
     import openpi.shared.download as download
+    import openpi.shared.normalize as normalize
     import openpi.transforms as transforms
     import safetensors
     from openpi.training import checkpoints as _checkpoints
@@ -93,8 +95,16 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     data_config = actor_train_config.data.create(
         actor_train_config.assets_dirs, actor_model_config
     )
-    norm_stats = None
-    if norm_stats is None:
+    norm_stats_path = actor_model_config.norm_stats_path
+    if norm_stats_path is not None:
+        norm_stats_path = Path(str(norm_stats_path))
+        norm_stats_dir = (
+            norm_stats_path.parent
+            if norm_stats_path.name == "norm_stats.json"
+            else norm_stats_path
+        )
+        norm_stats = normalize.load(norm_stats_dir)
+    else:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:

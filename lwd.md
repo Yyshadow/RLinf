@@ -29,6 +29,11 @@ rlinf/workers/sft/
   fsdp_lwd_critic_worker.py
                       # 使用 RLinf SFTRunner/FSDPModelManager 训练 LWD critic
 
+rlinf/models/embodiment/openpi/
+  __init__.py         # OpenPI/pi0.5 模型加载入口，支持显式 norm_stats_path
+  openpi_action_model.py
+                      # OpenPi0Config，包含 train_expert_only / norm_stats_path 等字段
+
 examples/lwd/
   train_lwd_critic.py
   run_lwd_critic.sh
@@ -36,6 +41,12 @@ examples/lwd/
   config/model/lwd_critic.yaml
   config/training_backend/fsdp.yaml
                       # LWD 自包含的模型和 FSDP 配置片段
+
+examples/sft/
+  config/robotwin_sft_openpi_pi05_hammer50_cloud.yaml
+  hope/robotwin_pi05_hammer50_smoke_8a100.hope
+  hope/robotwin_pi05_hammer50_train_8a100.hope
+                      # pi0.5 hammer50 quick SFT 的云端配置和提交文件
 ```
 
 ## 模型结构
@@ -367,6 +378,117 @@ ${RLINF_LWD_LOG_ROOT}/<experiment_name>/
 runner.resume_dir=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_2000
 ```
 
+### pi0.5 hammer50 quick SFT
+
+这一部分训练的是 pi0.5 actor，不是 LWD critic，所以入口放在 `examples/sft`。
+它用于用少量 hammer 成功数据快速得到一个可用的 actor 初始化，再和 critic
+训练结果一起做后续策略优化实验。
+
+当前 quick SFT 使用 50 条 `beat_block_hammer` 成功 episode：
+
+```text
+/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_pi05_quick/
+  beat_block_hammer_success_50_train/
+    data/
+    meta/
+    norm_stats.json
+  beat_block_hammer_success_20_eval/
+```
+
+训练权重目录默认是：
+
+```text
+/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf_pi05_pytorch/pi05_base_hammer50
+```
+
+这里的 `model.safetensors` 仍然是 pi0.5 base 权重；`norm_stats.json` 是由
+50 条训练数据按 `pi05_aloha_robotwin` 口径计算出来的数据统计量。当前
+OpenPI loader 已经支持显式配置：
+
+```yaml
+actor:
+  model:
+    openpi:
+      norm_stats_path: /path/to/beat_block_hammer_success_50_train/norm_stats.json
+```
+
+如果设置了 `norm_stats_path`，模型初始化会直接读取这份训练集统计量；如果不设置，
+仍然兼容旧逻辑，从 `model_path/<asset_id>/norm_stats.json` 读取。这样可以避免
+把数据集统计量强行塞进 base model 目录。
+
+对应配置文件：
+
+```text
+examples/sft/config/robotwin_sft_openpi_pi05_hammer50_cloud.yaml
+```
+
+默认关键参数：
+
+```yaml
+runner:
+  max_steps: 1000
+  val_check_interval: -1
+  save_interval: 200
+
+actor:
+  micro_batch_size: 4
+  global_batch_size: 32
+  model:
+    num_action_chunks: 50
+    action_dim: 14
+    openpi:
+      config_name: pi05_aloha_robotwin
+      train_expert_only: true
+      num_images_in_input: 3
+      detach_critic_input: true
+```
+
+`train_expert_only: true` 表示只训练 OpenPI action expert，冻结 VLM。对于几十条
+success demo 的快速验证，这比全量微调更稳，也更省显存。8 卡下
+`micro_batch_size=4, global_batch_size=32` 表示每张卡一次处理 4 条，8 卡合计
+32 条后做一次 optimizer update。
+
+默认云端路径通过环境变量控制：
+
+```bash
+export REPO_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf
+export EMBODIED_PATH=$REPO_PATH/examples/sft
+export RLINF_PI05_DATA_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_pi05_quick
+export RLINF_PI05_MODEL_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf_pi05_pytorch/pi05_base_hammer50
+export RLINF_PI05_NORM_STATS_PATH=$RLINF_PI05_DATA_ROOT/beat_block_hammer_success_50_train/norm_stats.json
+export RLINF_PI05_LOG_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft
+```
+
+提交文件：
+
+```text
+examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope
+examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope
+```
+
+建议先提交 smoke：
+
+```bash
+hope run examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope
+```
+
+确认 import、OpenPI dataloader、FSDP 初始化和 checkpoint 保存都通过后，再提交正式
+1000-step quick SFT：
+
+```bash
+hope run examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope
+```
+
+checkpoint 会保存到：
+
+```text
+${RLINF_PI05_LOG_ROOT}/<experiment_name>/checkpoints/global_step_<N>/actor
+```
+
+当前 embodied SFT worker 没有实现单独 eval，所以 quick SFT 主要看
+`train/loss` 是否下降、checkpoint 是否正常保存，以及后续用 rollout/eval
+脚本验证真实任务成功率。
+
 ### 当前 FSDP 边界
 
 LWD critic 有 EMA target critic。为了避免 FSDP flat/sharded
@@ -408,6 +530,14 @@ sharded EMA target，而不是直接把当前配置切过去。
 6. 清理并保留了必要配置字段
 
    删除了 LWD 内部没有使用的冗余输出字段；同时保留 `is_lora: false` 这类 RLinf 公共建模入口需要的字段，避免配置看似精简但运行时报缺字段。
+
+7. 解耦了 pi0.5 base 权重和数据集统计量
+
+   OpenPI 模型配置新增 `openpi.norm_stats_path`，quick SFT 可以直接读取训练集生成的 `norm_stats.json`。base model 目录不再必须承担数据集统计量职责，云端切换数据集时只需要改配置或环境变量。
+
+8. 补齐了 pi0.5 hammer50 quick SFT 云端入口
+
+   新增 `robotwin_sft_openpi_pi05_hammer50_cloud.yaml` 和对应 8A100 smoke/train hope 文件，用 50 条 hammer success demo 只微调 action expert，便于在 critic 后续实验前快速得到一个 actor baseline。
 
 ## 当前边界
 

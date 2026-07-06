@@ -62,6 +62,7 @@ class OpenPi0Config(Pi0Config):
     num_steps: int = 10  # denoise steps
     # training config
     train_expert_only: bool = False
+    norm_stats_path: str | None = None
     safe_get_logprob: bool = False
     joint_logprob: bool = False  # designed for flow-noise
     double_layer: bool = False  # designed for flow-sde without acceleration

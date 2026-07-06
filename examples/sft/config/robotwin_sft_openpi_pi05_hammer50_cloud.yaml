@@ -1,0 +1,78 @@
+# Cloud SFT config for quick pi0.5 finetuning on 50 beat_block_hammer successes.
+
+defaults:
+  - model/pi0_5@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - _self_
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: all
+
+runner:
+  task_type: sft
+  logger:
+    log_path: ${oc.env:RLINF_PI05_LOG_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft}
+    project_name: rlinf
+    experiment_name: pi05_hammer50_expert_only_1k
+    logger_backends: ["tensorboard"]
+  max_epochs: -1
+  max_steps: 1000
+  val_check_interval: -1
+  save_interval: 200
+  resume_dir: null
+
+data:
+  train_data_paths: ${oc.env:RLINF_PI05_DATA_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_pi05_quick}/beat_block_hammer_success_50_train
+
+actor:
+  group_name: ActorGroup
+  training_backend: fsdp
+  micro_batch_size: 4
+  global_batch_size: 32
+  seed: 0
+
+  model:
+    precision: null
+    model_path: ${oc.env:RLINF_PI05_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf_pi05_pytorch/pi05_base_hammer50}
+    num_action_chunks: 50
+    action_dim: 14
+    add_value_head: false
+    openpi:
+      config_name: pi05_aloha_robotwin
+      norm_stats_path: ${oc.env:RLINF_PI05_NORM_STATS_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_pi05_quick/beat_block_hammer_success_50_train/norm_stats.json}
+      detach_critic_input: true
+      num_images_in_input: 3
+      train_expert_only: true
+
+  optim:
+    lr: 2.5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-8
+    weight_decay: 1.0e-10
+    clip_grad: 1.0
+    total_training_steps: ${runner.max_steps}
+    lr_warmup_steps: 50
+    lr_scheduler: cosine
+    num_cycles: 0.5
+    min_lr: 2.5e-6
+
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard
+    use_orig_params: false
+    gradient_checkpointing: false
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
