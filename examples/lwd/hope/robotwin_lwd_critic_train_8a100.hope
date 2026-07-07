@@ -12,7 +12,7 @@ workers = 1
 worker.memory = 470000
 worker.vcore = 24
 worker.gcores80g = 8
-worker.script = bash /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf/examples/lwd/scripts/train_lwd_critic_cloud.sh train
+worker.script = bash /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf/examples/lwd/scripts/train_lwd_critic_cloud.sh
 
 [user_args]
 

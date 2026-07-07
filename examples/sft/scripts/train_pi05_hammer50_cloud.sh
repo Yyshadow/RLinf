@@ -2,14 +2,12 @@
 
 set -euo pipefail
 
-MODE="${1:-train}"
+MODE="${RLINF_RUN_MODE:-train}"
 
 CLOUD_ROOT="/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122"
-CONDA_ROOT="${RLINF_CONDA_ROOT:-${CLOUD_ROOT}/Miniforge}"
-RLINF_CONDA_ENV_NAME="${RLINF_CONDA_ENV_NAME:-${RLINF_CONDA_ENV:-rlinf_lwd}}"
+ENV_PREFIX="${CLOUD_ROOT}/Miniforge/envs/rlinf_lwd"
 
-source "${CONDA_ROOT}/bin/activate"
-conda activate "${RLINF_CONDA_ENV_NAME}"
+source "${CLOUD_ROOT}/Miniforge/bin/activate" "${ENV_PREFIX}"
 
 export REPO_PATH="${REPO_PATH:-${CLOUD_ROOT}/RLinf}"
 export EMBODIED_PATH="${REPO_PATH}/examples/sft"
@@ -79,6 +77,9 @@ find_latest_checkpoint() {
 }
 
 cd "${REPO_PATH}"
+
+echo "Using python: $(command -v python)"
+echo "Script mode: ${MODE}"
 
 ray stop -f || true
 

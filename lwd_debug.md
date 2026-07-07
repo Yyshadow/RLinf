@@ -486,12 +486,29 @@ EnvironmentNameNotFound: Could not find conda environment: smoke
 `smoke`。脚本执行到 `conda activate "${CONDA_ENV}"` 时就变成了
 `conda activate smoke`。
 
-已修复为：
+第一版修复尝试改用了 `RLINF_CONDA_ENV_NAME`，但云端仍可能通过兼容变量继续污染
+环境名。最终修法是只按固定环境路径激活，不再按环境名激活：
 
 ```bash
-RLINF_CONDA_ENV_NAME="${RLINF_CONDA_ENV_NAME:-${RLINF_CONDA_ENV:-rlinf_lwd}}"
-conda activate "${RLINF_CONDA_ENV_NAME}"
+ENV_PREFIX="${CLOUD_ROOT}/Miniforge/envs/rlinf_lwd"
+source "${CLOUD_ROOT}/Miniforge/bin/activate" "${ENV_PREFIX}"
+python examples/lwd/train_lwd_critic.py ...
 ```
 
-后续如果要覆盖 conda 环境，使用 `RLINF_CONDA_ENV_NAME` 或兼容旧写法
-`RLINF_CONDA_ENV`；不要在 hope 或云端环境里依赖裸的 `CONDA_ENV`。
+后续 cloud 脚本不再依赖 `CONDA_ENV`、`RLINF_CONDA_ENV` 或
+`RLINF_CONDA_ENV_NAME`。如果 stderr 里还出现 `EnvironmentNameNotFound: smoke`，
+就说明云端运行的不是当前脚本版本，需要检查是否已经 `git push`、云端是否已经
+`git pull`，以及新增的 `examples/*/scripts/*.sh` 是否真的进入了仓库。
+
+进一步收敛后，hope 文件也不再在 `worker.script` 尾部传 `smoke` 或 `train`
+参数。当前入口是：
+
+```text
+train:
+  worker.script = bash .../train_lwd_critic_cloud.sh
+smoke:
+  worker.script = bash .../smoke_lwd_critic_cloud.sh
+```
+
+这样云端平台的命令解析层不会再看到裸的 `smoke` 参数。`smoke` 只在 wrapper
+脚本内部作为 `RLINF_RUN_MODE=smoke` 使用，用来选择短步数配置。

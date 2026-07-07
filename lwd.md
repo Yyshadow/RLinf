@@ -580,14 +580,18 @@ export RLINF_TOKENIZER_PATH=$RLINF_GEMMA3_PATH
 examples/lwd/hope/robotwin_lwd_critic_smoke_8a100.hope
 examples/lwd/hope/robotwin_lwd_critic_train_8a100.hope
 examples/lwd/scripts/train_lwd_critic_cloud.sh
+examples/lwd/scripts/smoke_lwd_critic_cloud.sh
 ```
 
 hope 文件只负责云端资源、docker、failover 等平台配置；真正的环境变量、
 离线 cache、import 检查、训练命令和自动 resume 逻辑都在
 `train_lwd_critic_cloud.sh` 里。建议先跑 smoke 文件，确认 import、dataloader、
 FSDP 初始化和一次 eval 都能跑通；再提交正式训练文件。正式配置默认使用 8 卡：
-脚本内部使用 `RLINF_CONDA_ENV_NAME` 作为 conda 环境变量名，默认值是
-`rlinf_lwd`；不要使用裸的 `CONDA_ENV`，云端运行环境可能已经占用了这个变量。
+脚本按固定环境路径执行
+`source ${CLOUD_ROOT}/Miniforge/bin/activate ${CLOUD_ROOT}/Miniforge/envs/rlinf_lwd`，
+不再用环境名变量，避免云端继承变量把环境名污染成 `smoke`。
+smoke 和 train 也不再通过 `worker.script` 尾部参数区分：train hope 直接调用
+`train_lwd_critic_cloud.sh`，smoke hope 调用 `smoke_lwd_critic_cloud.sh`。
 
 ```yaml
 runner:
@@ -759,13 +763,16 @@ hammer50 smoke/train hope 会在启动训练前检查这个文件是否存在，
 examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope
 examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope
 examples/sft/scripts/train_pi05_hammer50_cloud.sh
+examples/sft/scripts/smoke_pi05_hammer50_cloud.sh
 ```
 
 hope 文件只保留云端资源、docker、failover 等平台配置；conda 环境、离线缓存、
 OpenPI tokenizer 检查、训练命令和自动 resume 逻辑都在
-`train_pi05_hammer50_cloud.sh` 里。脚本内部使用 `RLINF_CONDA_ENV_NAME`
-作为 conda 环境变量名，默认值是 `rlinf_lwd`；不要使用裸的 `CONDA_ENV`，
-云端运行环境可能已经占用了这个变量。
+`train_pi05_hammer50_cloud.sh` 里。脚本按固定环境路径执行
+`source ${CLOUD_ROOT}/Miniforge/bin/activate ${CLOUD_ROOT}/Miniforge/envs/rlinf_lwd`，
+不再用环境名变量，避免云端继承变量把环境名污染成 `smoke`。
+smoke 和 train 也不再通过 `worker.script` 尾部参数区分：train hope 直接调用
+`train_pi05_hammer50_cloud.sh`，smoke hope 调用 `smoke_pi05_hammer50_cloud.sh`。
 
 建议先提交 smoke：
 
