@@ -173,7 +173,7 @@ overfit 到闭环可用。因此当前正式云端配置改为：
 
 ```yaml
 runner.max_steps: 10000
-runner.save_interval: 1000
+runner.save_interval: 500
 runner.logger.experiment_name: pi05_hammer50_overfit50_10k_v1
 
 actor.micro_batch_size: 4
@@ -195,14 +195,14 @@ scheduler 状态，不适合新的 10k overfit 实验。应该从
 
 后续验证建议：
 
-1. 每 1000 step 保存一次 checkpoint。
+1. 每 500 step 保存一次 checkpoint。
 2. 优先看 `train/loss` 是否继续降到更低，至少先接近 `0.00x` 量级。
 3. 每个 checkpoint 用训练集 seeds 做闭环 eval，`total_num_envs` 建议先不超过 4，
    因为 RoboTwin 多相机环境曾在 10 env 下出现 `cannot create buffer`。
-4. 对最好的 checkpoint 再开启 `record_chunk_frames=true` 生成完整视频，确认失败
-   是模型动作问题还是评估/录像误判。
+4. 对最好的 checkpoint 开启 `record_internal_camera=true` 生成完整视频，确认失败
+   是模型动作问题还是评估/录像误判。这个录像路径不拆 action chunk。
 
-## 2026-07-06：RoboTwin pi0.5 eval 完整视频生成逻辑
+## 2026-07-07：RoboTwin pi0.5 eval 内部相机视频逻辑
 
 ### 现象
 
@@ -219,7 +219,7 @@ num_action_chunks = 50
 这个不是 mp4 编码坏了，也不是 TensorBoard 或 `ffmpeg` 问题，而是
 RoboTwin eval 的 step 接口返回粒度太粗。
 
-### 旧逻辑为什么视频很短
+### 为什么外层 RecordVideo 会很短
 
 RLinf 的视频保存由 `RecordVideo` wrapper 负责：
 
@@ -257,118 +257,84 @@ observation；只要 `chunk_step()` 只返回 chunk 末尾观测，`RecordVideo`
 
 ### 当前解决方案
 
-在 `rlinf/envs/robotwin/robotwin_env.py` 中新增了一个视频诊断开关：
+正式方案改为 RoboTwin 内部相机录制，不再拆 action chunk。RLinf 只把
+`video_cfg` 传入 RoboTwin，正式执行路径仍然保持：
+
+```text
+OpenPI output: [B, 50, 14]
+RoboTwinEnv.chunk_step()
+  -> self.venv.step(chunk_actions)
+  -> RoboTwin gen_sparse_reward_data(chunk_actions)
+  -> TOPP 对完整 50-step chunk 规划
+  -> 内部 scene.step() 执行
+```
+
+新增配置：
 
 ```yaml
 env:
   eval:
     video_cfg:
       save_video: true
-      record_chunk_frames: true
-      fps: 10
+      record_internal_camera: true
+      camera: head_camera
+      fps: 25
+      write_every_n_sim_steps: 10
+      video_base_dir: ${runner.logger.log_path}/video/internal
 ```
 
-对应配置已经写在：
+核心代码改动：
 
 ```text
-evaluations/robotwin/robotwin_beat_block_hammer_openpi_pi05_eval.yaml
+rlinf/envs/robotwin/robotwin_env.py
+  _init_env()
+  -> task_config["video_cfg"] = cfg.video_cfg
+
+rlinf/workers/env/env_worker.py
+  record_internal_camera=true 时跳过外层 RecordVideo wrapper
+
+/data/wam_codebase/RoboTwin_RLinf/robotwin/envs/vector_env.py
+  VectorEnv 读取 video_cfg
+  -> eval_video_log / eval_video_base_dir / fps / stride / camera
+
+/data/wam_codebase/RoboTwin_RLinf/envs/_base_task.py
+  gen_sparse_reward_data()
+  -> 原有 scene.step()
+  -> 原有 _update_render()
+  -> 每隔 write_every_n_sim_steps 只读取 head_camera RGB 并写入 ffmpeg
 ```
 
-核心代码逻辑是：
+这个方案只增加相机读取和视频写入，不新增 `scene.step()`，不改变 TOPP 输入，
+不改变 joint target，不改变 reward / success 计算。
+
+### 为什么移除旧拆 chunk 录像开关
+
+之前的临时方案是在 RLinf wrapper 里把 `[B, 50, 14]` 拆成 50 次
+`[B, 1, 14]` 执行。它能让外层 `RecordVideo` 得到更多帧，但会改变
+RoboTwin 的执行语义：
 
 ```text
-RoboTwinEnv.chunk_step(chunk_actions)
-  if video_cfg.record_chunk_frames:
-      _chunk_step_with_recorded_frames(chunk_actions)
-  else:
-      保持原来的整 chunk venv.step(chunk_actions) 路径
+完整 chunk:
+  TOPP 对 50 个路点整体规划
+
+拆 chunk:
+  TOPP 每次只看 1 个路点，重复局部规划 50 次
 ```
 
-打开 `record_chunk_frames` 后，模型侧仍然一次输出完整 action chunk：
-
-```text
-rollout.model.num_action_chunks = 50
-rollout.model.openpi.action_chunk = 50
-policy output: [B, 50, 14]
-```
-
-但环境侧为了录像，把这个 chunk 拆成 50 次单步执行：
-
-```text
-for step_idx in range(50):
-    self.venv.step(chunk_actions[:, step_idx : step_idx + 1, :])
-    obs_list.append(extracted_obs)
-    infos_list.append(infos)
-    chunk_rewards[:, step_idx] = step_reward
-    chunk_terminations[:, step_idx] = terminations
-    chunk_truncations[:, step_idx] = truncations
-```
-
-这样 `RecordVideo.record_video_in_result()` 收到的 `obs_list` 长度就是
-50，而不是 1，因此可以把 chunk 内部每一步都写进 mp4。
+因此旧拆 chunk 录像开关和对应函数已移除。
+正式视频现在只能走内部相机录制，避免把诊断视频误当成正式执行效果。
 
 ### 这个方案解决了什么
 
 1. 解决了 `chunk=50` eval 视频只有 5-6 帧的问题。
-2. 保留了 pi0.5 policy 一次输出 50 个 action 的真实推理方式。
-3. 不再需要把 `num_action_chunks` 临时改成 1；改成 1 虽然能录完整视频，
-   但会变成每一步重新规划，不能代表正式 `chunk=50` 行为。
-4. 不需要修改外部 RoboTwin 仓库，只在 RLinf 的 env wrapper 侧补齐中间帧。
-5. `record_chunk_frames` 默认不改变旧路径；关闭该开关时仍走原来的整 chunk
-   `venv.step(chunk_actions)` 逻辑，适合大规模指标评估或追求速度时使用。
-
-### 已验证结果
-
-烟测 50 step：
-
-```text
-log_path:
-/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_step500_record_chunk_frames_smoke
-
-video:
-/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_step500_record_chunk_frames_smoke/video/eval/seed_0/0.mp4
-
-ffprobe:
-avg_frame_rate=10/1
-duration=5.200000
-nb_read_frames=52
-```
-
-完整 200 step：
-
-```text
-log_path:
-/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_step500_video_full_chunk50
-
-video:
-/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_step500_video_full_chunk50/video/eval/seed_0/0.mp4
-
-contact sheet:
-/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_step500_video_full_chunk50/sample_frames/contact_sheet.jpg
-
-ffprobe:
-avg_frame_rate=10/1
-duration=20.200000
-nb_read_frames=202
-```
-
-完整 200 step 本次指标：
-
-```text
-eval/episode_len: 200
-eval/success_once: 0
-eval/success_at_end: 0
-eval/return: 0
-eval/reward: 0
-eval/num_trajectories: 1
-```
-
-这说明视频生成链路已经正常，当前这条 seed 的失败是模型行为问题，不是视频
-保存问题。抽帧中可以看到锤子和红块没有形成成功敲击结果。
+2. 保留 pi0.5 policy 一次输出 50 个 action 的真实推理方式。
+3. 保留 RoboTwin/TOPP 对完整 chunk 的原始执行方式。
+4. 录像不会改变仿真步进、动作执行、reward 或 success 判断。
+5. 多 env 录像目录按 `task/seed/env_id` 隔离，避免并行 eval 覆盖视频。
 
 ### 推荐使用方式
 
-生成单条完整诊断视频：
+生成单条正式语义视频：
 
 ```bash
 PATH=/data/wam_codebase/RLinf/.venv-openpi/bin:$PATH \
@@ -378,14 +344,131 @@ PYTHONPATH=/data/wam_codebase/RLinf:/data/wam_codebase/RoboTwin_RLinf \
 HYDRA_FULL_ERROR=1 MPLCONFIGDIR=/tmp XDG_CACHE_HOME=/tmp CUDA_VISIBLE_DEVICES=0 \
 bash evaluations/run_eval.sh robotwin robotwin_beat_block_hammer_openpi_pi05_eval \
   env.eval.total_num_envs=1 \
-  runner.logger.log_path=/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_step500_video_full_chunk50
+  runner.logger.log_path=/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_internal_video
 ```
 
-如果只做批量指标评估、不需要完整视频，可以覆盖关闭逐帧记录以节省时间：
+如果只做批量指标评估、不需要视频，可以关掉内部相机录制以节省时间：
 
 ```bash
 bash evaluations/run_eval.sh robotwin robotwin_beat_block_hammer_openpi_pi05_eval \
-  env.eval.video_cfg.record_chunk_frames=false \
+  env.eval.video_cfg.save_video=false \
+  env.eval.video_cfg.record_internal_camera=false \
   env.eval.total_num_envs=4 \
-  runner.logger.log_path=/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_step500_metrics
+  runner.logger.log_path=/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_metrics
 ```
+
+## 2026-07-07：视频与数据闭环文档最终清理
+
+本次进一步把临时方案和重复文档收紧：
+
+1. 移除旧拆 chunk 录像配置和对应代码路径。RoboTwin eval 现在只有内部相机录制
+   这一条正式视频路径，不再保留会改变 TOPP 执行语义的调试开关。
+2. `RoboTwinEnv.chunk_step()` 永远把完整 `[B, 50, 14]` chunk 交给
+   `venv.step(chunk_actions)`，避免视频诊断和正式 success rate 使用不同执行方式。
+3. 内部相机录制开启时，`EnvWorker` 会跳过 RLinf 外层 `RecordVideo` wrapper，
+   避免同时生成一份只有 chunk 末尾帧的旧式视频。
+4. 删除 `RoboTwinEnv` 中没有任何指标产出的 `fail_once` 缓存，以及未使用且引用
+   未定义 `self.horizon` 的 `sample_action_space()`。
+5. 将单独的数据闭环说明合并进 `lwd.md` 的 “Robotwin pi0.5 / LWD 数据闭环”
+   章节，并删除原来的独立文档，避免两份说明后续不一致。
+
+## 2026-07-07：pi0.5 eval 支持 receding-horizon 执行
+
+本次给 RoboTwin / OpenPI eval 增加了 `env.eval.action_exec_horizon`：
+
+```yaml
+env:
+  eval:
+    max_steps_per_rollout_epoch: 200
+    action_exec_horizon: 20
+
+rollout:
+  model:
+    num_action_chunks: 50
+```
+
+语义是：模型仍然一次预测 50 步 action chunk，但环境只执行前 20 步，
+然后重新观测并重新预测下一段 50 步。这样可以测试 “短执行视野 + 高频重规划”
+是否比一次完整执行 50 步更适合 hammer 任务。
+
+这次同步改了两侧循环：
+
+1. `EnvWorker` 按 `ceil(max_steps_per_rollout_epoch / action_exec_horizon)` 计算
+   eval 交互轮数，并在送入环境前截断 action chunk。
+2. HuggingFace rollout worker 使用同样的交互轮数，保证 env 需要多少轮 action，
+   rollout 就预测多少轮 action，避免评估中途等待。
+3. `robotwin_beat_block_hammer_openpi_pi05_eval.yaml` 默认设置
+   `action_exec_horizon: 20`。如果不设置该字段，则直接沿用旧逻辑：
+   `max_steps_per_rollout_epoch // num_action_chunks` 个完整 chunk，旧配置保持
+   完整 chunk 执行语义。
+
+这个改动只影响 eval，不改变 SFT 训练的 action chunk 长度，也不改变内部相机
+录制逻辑。
+
+## 2026-07-07：云端 hope 脚本化和自动 resume
+
+### 背景
+
+云端训练有时会因为机器异常而被平台重启。原来的 hope 文件把 conda 环境、
+路径、离线 cache、import 检查和训练命令全部写在 `worker.script` 里，而且
+`runner.resume_dir` 默认是 `null`。如果平台重启后重新执行同一个 hope，训练会
+从头开始，浪费已经完成的 step。
+
+### 当前改法
+
+把云端训练逻辑从 hope 文件下沉到两个 repo 内脚本：
+
+```text
+examples/sft/scripts/train_pi05_hammer50_cloud.sh
+examples/lwd/scripts/train_lwd_critic_cloud.sh
+```
+
+四个 hope 文件现在只负责申请资源、指定 docker、打开 failover，并调用脚本：
+
+```text
+examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope
+examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope
+examples/lwd/hope/robotwin_lwd_critic_smoke_8a100.hope
+examples/lwd/hope/robotwin_lwd_critic_train_8a100.hope
+```
+
+train 模式会自动扫描最新完整 checkpoint，并把它作为
+`runner.resume_dir=<global_step_dir>` 传给 RLinf。smoke 模式默认不 resume，
+避免调试 smoke 时接到旧的 smoke checkpoint。
+
+### 完整 checkpoint 判断
+
+pi0.5 SFT 需要：
+
+```text
+actor/dcp_checkpoint/.metadata
+actor/model_state_dict/full_weights.pt
+```
+
+LWD critic 额外需要：
+
+```text
+actor/target_model.pt
+```
+
+这样可以避免机器刚好在保存 checkpoint 时挂掉，留下一个目录存在但文件不完整的
+`global_step_*`，导致下次启动加载坏 checkpoint。
+
+### 强制从头开始
+
+如果要重新开一个干净实验，可以在提交前设置：
+
+```bash
+export RLINF_FORCE_RESTART=1
+```
+
+设置后脚本会跳过自动 resume。否则 train 模式会优先从最新完整 checkpoint 继续。
+
+### 本次解决的问题
+
+1. hope 文件不再维护几十行 shell，降低路径、cache、Hydra 参数改错的概率。
+2. 云端自动重启后，同一个 hope 会自动从最新完整 checkpoint 接着训练。
+3. pi0.5 和 LWD critic 的 smoke/train 共用同一套环境初始化和离线检查逻辑。
+4. 打开 `afo.app.support.engine.failover = true`，平台重启和 RLinf resume 配合使用。
+5. 正式 pi0.5 保存间隔改为 500 step，LWD critic 保存间隔改为 1000 step，
+   减少机器异常时损失的训练进度。

@@ -84,9 +84,13 @@ class RoboTwinEnv(gym.Env):
         from robotwin.envs.vector_env import VectorEnv
 
         env_seeds = self.reset_state_ids.tolist()
+        task_config = OmegaConf.to_container(self.cfg.task_config, resolve=True)
+        task_config["video_cfg"] = OmegaConf.to_container(
+            self.video_cfg, resolve=True
+        )
 
         self.venv = VectorEnv(
-            task_config=OmegaConf.to_container(self.cfg.task_config, resolve=True),
+            task_config=task_config,
             n_envs=self.num_envs,
             env_seeds=env_seeds,
         )
@@ -111,9 +115,6 @@ class RoboTwinEnv(gym.Env):
         self.success_once = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.bool
         )
-        self.fail_once = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.bool
-        )
         self.returns = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.float32
         )
@@ -125,14 +126,12 @@ class RoboTwinEnv(gym.Env):
             self.prev_step_reward[mask] = 0.0
             if self.record_metrics:
                 self.success_once[mask] = False
-                self.fail_once[mask] = False
                 self.returns[mask] = 0
                 self._elapsed_steps[env_idx] = 0
         else:
             self.prev_step_reward[:] = 0
             if self.record_metrics:
                 self.success_once[:] = False
-                self.fail_once[:] = False
                 self.returns[:] = 0.0
                 self._elapsed_steps[:] = 0
 
@@ -215,13 +214,6 @@ class RoboTwinEnv(gym.Env):
             return reward_diff
         else:
             return reward
-
-    def _to_step_tensor(self, value, dtype):
-        if isinstance(value, torch.Tensor):
-            return value.reshape(-1).to(device=self.device, dtype=dtype)
-        return torch.as_tensor(
-            np.array(value).reshape(-1), device=self.device, dtype=dtype
-        )
 
     def _cal_chunk_rewards(self, step_reward, chunk_step, terminations, infos):
         n_steps_to_run = np.array(
@@ -330,9 +322,6 @@ class RoboTwinEnv(gym.Env):
         if isinstance(chunk_actions, torch.Tensor):
             chunk_actions = chunk_actions.cpu().numpy()
 
-        if self.video_cfg.get("record_chunk_frames", False):
-            return self._chunk_step_with_recorded_frames(chunk_actions)
-
         # chunk_actions: [num_envs, chunk_step, action_dim]
         num_envs = chunk_actions.shape[0]
         chunk_step = chunk_actions.shape[1]
@@ -401,71 +390,6 @@ class RoboTwinEnv(gym.Env):
             infos_list,
         )
 
-    def _chunk_step_with_recorded_frames(self, chunk_actions):
-        # Keep policy-side chunking intact, but expose every env step to RecordVideo.
-        num_envs = chunk_actions.shape[0]
-        chunk_step = chunk_actions.shape[1]
-        obs_list = []
-        infos_list = []
-
-        chunk_rewards = torch.zeros(
-            num_envs, chunk_step, dtype=torch.float32, device=self.device
-        )
-        chunk_terminations = torch.zeros(
-            num_envs, chunk_step, dtype=torch.bool, device=self.device
-        )
-        chunk_truncations = torch.zeros(
-            num_envs, chunk_step, dtype=torch.bool, device=self.device
-        )
-
-        for step_idx in range(chunk_step):
-            raw_obs, step_reward, terminations, truncations, info_list = self.venv.step(
-                chunk_actions[:, step_idx : step_idx + 1, :]
-            )
-            extracted_obs = self._extract_obs_image(raw_obs)
-            infos = list_of_dict_to_dict_of_list(info_list)
-
-            terminations = self._to_step_tensor(terminations, torch.bool)
-            truncations = self._to_step_tensor(truncations, torch.bool)
-
-            if self.use_custom_reward:
-                step_reward = self._calc_step_reward(terminations)
-            else:
-                step_reward = self._to_step_tensor(step_reward, torch.float32)
-
-            self._elapsed_steps += 1
-            truncated = self._elapsed_steps >= self.cfg.max_episode_steps
-            if truncated.any():
-                truncations = torch.logical_or(truncated, truncations)
-
-            infos = self._record_metrics(step_reward, infos)
-
-            if self.ignore_terminations:
-                terminations[:] = False
-                if self.record_metrics:
-                    if "success" in infos:
-                        infos["episode"]["success_at_end"] = infos["success"].clone()
-
-            dones = torch.logical_or(terminations, truncations)
-            if dones.any() and self.auto_reset:
-                extracted_obs, infos = self._handle_auto_reset(
-                    dones, extracted_obs, infos
-                )
-
-            obs_list.append(extracted_obs)
-            infos_list.append(infos)
-            chunk_rewards[:, step_idx] = step_reward
-            chunk_terminations[:, step_idx] = terminations
-            chunk_truncations[:, step_idx] = truncations
-
-        return (
-            obs_list,
-            chunk_rewards,
-            chunk_terminations,
-            chunk_truncations,
-            infos_list,
-        )
-
     def _handle_auto_reset(self, dones, extracted_obs, infos):
         final_obs = extracted_obs.copy()
         env_idx = torch.arange(0, self.num_envs, device=self.device)[dones]
@@ -485,9 +409,6 @@ class RoboTwinEnv(gym.Env):
     def close(self, clear_cache=True):
         if hasattr(self, "venv"):
             self.venv.close(clear_cache)
-
-    def sample_action_space(self):
-        return np.random.randn(self.num_envs, self.horizon, 14)
 
     def _init_reset_state_ids(self):
         if self.cfg.get("seeds_path", None) is not None and os.path.exists(

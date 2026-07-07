@@ -14,6 +14,8 @@
 
 import asyncio
 import gc
+import json
+import os
 from collections import defaultdict
 from typing import Any
 
@@ -135,10 +137,20 @@ class EnvWorker(Worker):
             )
         self.n_eval_chunk_steps = 0
         if self.enable_eval:
-            self.n_eval_chunk_steps = (
-                self.cfg.env.eval.max_steps_per_rollout_epoch
-                // self.model_cfg.num_action_chunks
-            )
+            eval_max_steps = self.cfg.env.eval.max_steps_per_rollout_epoch
+            configured_exec_horizon = self.cfg.env.eval.get("action_exec_horizon", None)
+            if configured_exec_horizon is None:
+                self.eval_action_exec_horizon = self.model_cfg.num_action_chunks
+                self.n_eval_chunk_steps = (
+                    eval_max_steps // self.model_cfg.num_action_chunks
+                )
+            else:
+                self.eval_action_exec_horizon = min(
+                    int(configured_exec_horizon), self.model_cfg.num_action_chunks
+                )
+                self.n_eval_chunk_steps = (
+                    eval_max_steps + self.eval_action_exec_horizon - 1
+                ) // self.eval_action_exec_horizon
         self.actor_split_num = (
             1 if not self.enable_train else self.get_actor_split_num()
         )
@@ -343,7 +355,11 @@ class EnvWorker(Worker):
                 total_num_processes=self._world_size * self.stage_num,
                 worker_info=self.worker_info,
             )
-            if env_cfg.video_cfg.save_video:
+            use_record_video = (
+                env_cfg.video_cfg.save_video
+                and not env_cfg.video_cfg.get("record_internal_camera", False)
+            )
+            if use_record_video:
                 env = RecordVideo(env, env_cfg.video_cfg)
             if env_cfg.get("data_collection", None) and getattr(
                 env_cfg.data_collection, "enabled", False
@@ -459,8 +475,18 @@ class EnvWorker(Worker):
         )
         return env_output, env_info
 
+    def _get_eval_exec_horizon(self, eval_step: int) -> int:
+        steps_left = (
+            self.cfg.env.eval.max_steps_per_rollout_epoch
+            - eval_step * self.eval_action_exec_horizon
+        )
+        return min(self.eval_action_exec_horizon, steps_left)
+
     def env_evaluate_step(
-        self, raw_actions: torch.Tensor, stage_id: int
+        self,
+        raw_actions: np.ndarray | torch.Tensor,
+        stage_id: int,
+        exec_horizon: int | None = None,
     ) -> tuple[EnvOutput, dict[str, Any]]:
         """
         This function is used to evaluate the environment.
@@ -474,6 +500,8 @@ class EnvWorker(Worker):
             policy=self.model_cfg.get("policy_setup", None),
             wm_env_type=self.cfg.env.eval.get("wm_env_type", None),
         )
+        if exec_horizon is not None:
+            chunk_actions = chunk_actions[:, :exec_horizon, ...]
         env_info = {}
 
         obs_list, _, chunk_terminations, chunk_truncations, infos_list = (
@@ -1143,6 +1171,8 @@ class EnvWorker(Worker):
 
     def evaluate(self, input_channel: Channel, rollout_channel: Channel):
         eval_metrics = defaultdict(list)
+        episode_metric_records = []
+        save_episode_metrics = self.cfg.runner.get("save_episode_metrics", False)
 
         for eval_rollout_epoch in range(self.eval_rollout_epoch):
             if not self.cfg.env.eval.auto_reset or eval_rollout_epoch == 0:
@@ -1194,12 +1224,31 @@ class EnvWorker(Worker):
                         raw_chunk_actions = raw_chunk_actions.detach().cpu().numpy()
                     else:
                         raw_chunk_actions = np.asarray(raw_chunk_actions)
+                    episode_seeds = None
+                    if save_episode_metrics:
+                        episode_seeds = (
+                            self.eval_env_list[stage_id]
+                            .reset_state_ids.detach()
+                            .cpu()
+                            .clone()
+                        )
                     env_output, env_info = self.env_evaluate_step(
-                        raw_chunk_actions, stage_id
+                        raw_chunk_actions,
+                        stage_id,
+                        exec_horizon=self._get_eval_exec_horizon(eval_step),
                     )
 
                     for key, value in env_info.items():
                         eval_metrics[key].append(value)
+                    if save_episode_metrics and env_info:
+                        self._record_eval_episode_metrics(
+                            episode_metric_records,
+                            env_info,
+                            episode_seeds,
+                            eval_rollout_epoch,
+                            eval_step,
+                            stage_id,
+                        )
 
                     if self.cfg.env.eval.auto_reset:
                         if (
@@ -1231,7 +1280,47 @@ class EnvWorker(Worker):
         for key, value in eval_metrics.items():
             eval_metrics[key] = torch.cat(value, dim=0).contiguous().cpu()
 
+        if save_episode_metrics:
+            self._write_eval_episode_metrics(episode_metric_records)
+
         return eval_metrics
+
+    def _record_eval_episode_metrics(
+        self,
+        episode_metric_records: list[dict[str, Any]],
+        env_info: dict[str, torch.Tensor],
+        episode_seeds: torch.Tensor | None,
+        eval_rollout_epoch: int,
+        eval_step: int,
+        stage_id: int,
+    ):
+        metric_len = max(
+            (int(value.numel()) for value in env_info.values() if value is not None),
+            default=0,
+        )
+        for env_id in range(metric_len):
+            record = {
+                "rollout_epoch": eval_rollout_epoch,
+                "eval_step": eval_step,
+                "stage_id": stage_id,
+                "env_id": env_id,
+            }
+            if episode_seeds is not None and env_id < episode_seeds.numel():
+                record["seed"] = int(episode_seeds[env_id].item())
+            for key, value in env_info.items():
+                flat_value = value.reshape(-1)
+                if env_id < flat_value.numel():
+                    item = flat_value[env_id].item()
+                    record[key] = bool(item) if flat_value.dtype == torch.bool else item
+            episode_metric_records.append(record)
+
+    def _write_eval_episode_metrics(self, episode_metric_records: list[dict[str, Any]]):
+        log_path = self.cfg.runner.logger.log_path
+        os.makedirs(log_path, exist_ok=True)
+        metrics_path = os.path.join(log_path, "eval_episode_metrics.jsonl")
+        with open(metrics_path, "w") as f:
+            for record in episode_metric_records:
+                f.write(json.dumps(record) + "\n")
 
     def get_actor_split_num(self):
         send_num = self._component_placement.get_world_size("env") * self.stage_num

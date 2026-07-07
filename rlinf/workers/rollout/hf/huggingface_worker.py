@@ -101,10 +101,20 @@ class MultiStepRolloutWorker(Worker):
         )
         self.n_eval_chunk_steps = 0
         if self.enable_eval:
-            self.n_eval_chunk_steps = (
-                cfg.env.eval.max_steps_per_rollout_epoch
-                // self.model_cfg.num_action_chunks
-            )
+            eval_max_steps = cfg.env.eval.max_steps_per_rollout_epoch
+            configured_exec_horizon = cfg.env.eval.get("action_exec_horizon", None)
+            if configured_exec_horizon is None:
+                self.eval_action_exec_horizon = self.model_cfg.num_action_chunks
+                self.n_eval_chunk_steps = (
+                    eval_max_steps // self.model_cfg.num_action_chunks
+                )
+            else:
+                self.eval_action_exec_horizon = min(
+                    int(configured_exec_horizon), self.model_cfg.num_action_chunks
+                )
+                self.n_eval_chunk_steps = (
+                    eval_max_steps + self.eval_action_exec_horizon - 1
+                ) // self.eval_action_exec_horizon
         self.collect_prev_infos = self.cfg.rollout.get("collect_prev_infos", True)
         self.version = 0
         self.finished_episodes = None

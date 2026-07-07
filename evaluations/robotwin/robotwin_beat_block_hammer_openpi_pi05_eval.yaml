@@ -43,6 +43,7 @@ env:
     max_episode_steps: 200
     reward_coef: 1.0
     max_steps_per_rollout_epoch: 200
+    action_exec_horizon: 20
     group_size: 1
     use_fixed_reset_state_ids: true
     is_eval: true
@@ -50,9 +51,11 @@ env:
     seeds_path: ${oc.env:REPO_PATH}/rlinf/envs/robotwin/seeds/eval_seeds.json
     video_cfg:
       save_video: true
-      record_chunk_frames: true
-      fps: 10
-      video_base_dir: ${runner.logger.log_path}/video/eval
+      record_internal_camera: true
+      camera: head_camera
+      fps: 25
+      write_every_n_sim_steps: 10
+      video_base_dir: ${runner.logger.log_path}/video/internal
     center_crop: false
     task_config:
       embodiment: [aloha-agilex]

@@ -49,6 +49,251 @@ examples/sft/
                       # pi0.5 hammer50 quick SFT 的云端配置和提交文件
 ```
 
+## Robotwin pi0.5 / LWD 数据闭环
+
+Robotwin 数据闭环的目标是先把 RoboTwin/RLinf 采集结果整理成 OpenPI pi0.5
+能直接读取的 LeRobot-Aloha 格式，再从同一份数据派生 LWD/BPG critic 需要的
+chunk 索引。这里不改 RLinf 训练框架，也不改通用 `CollectEpisode`。
+
+核心工具：
+
+```text
+toolkits/robotwin/prepare_lerobot_aloha.py
+toolkits/robotwin/validate_lerobot_aloha.py
+toolkits/robotwin/build_lwd_chunks.py
+```
+
+### 数据主格式
+
+pi0.5 Robotwin 训练使用 OpenPI Aloha dataconfig，核心字段是：
+
+```text
+observation.images.cam_high
+observation.images.cam_left_wrist
+observation.images.cam_right_wrist
+observation.state
+action
+task
+```
+
+其中 `observation.state` 和 `action` 都是 14 维 Aloha 关节/夹爪向量。
+`action` 保存 absolute action，不提前转 delta；`pi05_aloha_robotwin`
+配置会在 dataconfig 里处理 delta action。
+
+当前 Robotwin 数据集采用 LeRobot 的 `image` 存法，不是 `video` 存法，所以
+`meta/info.json` 里看到下面内容是正常的：
+
+```text
+total_videos: 0
+video_path: null
+```
+
+训练 pi0.5 只需要 LeRobot parquet 里的图像字节和特征 schema，不要求一定有
+单独 mp4。如果只是想看视频，额外导出可视化即可，不必把训练数据本身改成
+video 格式。
+
+如果环境不能写 `~/.cache`，可以把缓存放到 `/tmp`：
+
+```bash
+export HF_HOME=/tmp/hf_cache
+export HF_DATASETS_CACHE=/tmp/hf_datasets_cache
+export MPLCONFIGDIR=/tmp/matplotlib
+```
+
+### 1. 转换数据
+
+RoboTwin 原生 hdf5 转 OpenPI Aloha LeRobot：
+
+```bash
+python toolkits/robotwin/prepare_lerobot_aloha.py \
+  --source /data/wam_codebase/RoboTwin_RLinf/demo_videos/_work/beat_block_hammer/data \
+  --output /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer \
+  --task beat_block_hammer \
+  --source-label expert_success
+```
+
+如果输入是 RLinf `CollectEpisode` 产出的通用 LeRobot 数据，也可以直接传数据集根目录：
+
+```bash
+python toolkits/robotwin/prepare_lerobot_aloha.py \
+  --source /path/to/generic_lerobot_dataset \
+  --output /path/to/robotwin_aloha_dataset \
+  --source-type lerobot
+```
+
+转换脚本会额外写：
+
+```text
+meta/robotwin_episode_metadata.jsonl
+```
+
+里面保存 episode 级信息，例如 `source`、`success`、`return`、`num_steps`。
+这些字段不是 pi0.5 SFT 必需，但后续筛数据和训练 critic 会用。
+
+对于 RoboTwin 原生 hdf5，逐帧 `success` 只在最后一帧为 True；episode 是否
+成功看 `meta/robotwin_episode_metadata.jsonl`。这样可以避免把整条轨迹每一步
+都误当成成功状态。
+
+如果转换失败轨迹，显式传 `--no-success --source-label failed_policy`；如果输入
+数据本身已经有 `success` / `is_success` 字段，脚本会优先保留原字段。
+
+### 2. 校验数据
+
+训练前先检查字段、shape、OpenPI transform：
+
+```bash
+python toolkits/robotwin/validate_lerobot_aloha.py \
+  --dataset /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer \
+  --config-name pi05_aloha_robotwin
+```
+
+这个脚本会检查：
+
+```text
+三路相机字段是否存在
+state/action 是否为 14 维
+gripper 是否在 [0,1]
+OpenPI dataconfig 是否能读出 state/actions/images/prompt
+```
+
+### 3. 计算 pi0.5 归一化统计
+
+校验通过后，用现有工具计算 norm stats：
+
+```bash
+python toolkits/lerobot/calculate_norm_stats.py \
+  --config-name pi05_aloha_robotwin \
+  --repo-id /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer
+```
+
+本地路径作为 `--repo-id` 时，`norm_stats.json` 会写到这个数据集根目录下。
+训练时同一个 repo id / 本地路径会读到这份统计。
+
+### 4. 训练 pi0.5 SFT
+
+修改或覆盖 `examples/sft/config/robotwin_sft_openpi_pi05.yaml`：
+
+```yaml
+data:
+  train_data_paths: /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer
+
+actor:
+  model:
+    model_path: /path/to/pi05_base_or_checkpoint
+    openpi:
+      config_name: pi05_aloha_robotwin
+```
+
+然后运行：
+
+```bash
+bash examples/sft/run_vla_sft.sh robotwin_sft_openpi_pi05
+```
+
+pi0.5 SFT 只应该使用成功 expert 或修正后的 near-miss 数据。普通失败轨迹不要
+直接作为 BC 正样本。
+
+### 5. 生成 LWD/BPG chunk 索引
+
+同一份 LeRobot-Aloha 数据可以派生 critic 训练用 chunk：
+
+```bash
+python toolkits/robotwin/build_lwd_chunks.py \
+  --dataset /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer \
+  --output /data/wam_codebase/RLinf/datasets/robotwin_chunks/beat_block_hammer_H10.parquet \
+  --horizon 10 \
+  --stride 1
+```
+
+chunk 文件包含：
+
+```text
+episode_id
+frame_idx
+next_frame_idx
+task
+source
+success
+done
+state
+next_state
+action_chunk
+reward_chunk
+reward_sum
+```
+
+图像不复制进 chunk 文件，只保留 episode/frame 索引；critic dataloader 后续按索引
+回读 LeRobot 数据，避免数据膨胀。
+
+### 可视化和 eval 视频
+
+如果只想快速看一个离线 episode，推荐导出成一个视频加一个 json：
+
+```bash
+python toolkits/lerobot/visualize_lerobot_dataset.py \
+  --dataset-path /data/wam_codebase/RLinf/datasets/robotwin_aloha/beat_block_hammer \
+  --output-dir /data/wam_codebase/RLinf/datasets/robotwin_vis/beat_block_hammer \
+  --mode video \
+  --camera-key observation.images.cam_high
+```
+
+输出会是：
+
+```text
+episode_000000/episode_000000_cam_high.mp4
+episode_000000/episode_000000.json
+```
+
+pi0.5 eval 时不要为了录像把 action chunk 拆开执行。正式评估应保持
+`num_action_chunks=50` 的原始语义：模型一次输出 `[B, 50, 14]`，RoboTwin
+对完整 chunk 做 TOPP 规划并执行。
+
+如果要验证更高频重规划，可以在 eval 配置里设置：
+
+```yaml
+env:
+  eval:
+    action_exec_horizon: 20
+```
+
+这表示模型仍然一次预测 50 步 action chunk，但 RoboTwin 只执行前 20 步，
+然后重新观测、重新推理下一段 50 步。`max_steps_per_rollout_epoch=200` 时，
+`action_exec_horizon=20` 会产生 10 次模型推理。默认不设置该字段时沿用旧逻辑：
+按 `max_steps_per_rollout_epoch // num_action_chunks` 做完整 chunk 执行；在当前
+`200/50` 配置下就是 4 次推理、完整 chunk 执行。这个参数只影响 eval，不改变
+SFT 训练数据的 action chunk 长度。
+
+如果需要看完整过程，使用 RoboTwin 内部相机录制：
+
+```yaml
+env:
+  eval:
+    video_cfg:
+      save_video: true
+      record_internal_camera: true
+      camera: head_camera
+      fps: 25
+      write_every_n_sim_steps: 10
+```
+
+这一路只在已有 `scene.step()` 后读取相机 RGB 并写 mp4，不新增仿真步进、
+不改变 TOPP 输入，也不改变 reward / success 判断。只做批量指标时可以关掉
+`save_video` 以节省渲染和编码时间。
+
+### Smoke test
+
+已用现有样例
+`/data/wam_codebase/RoboTwin_RLinf/demo_videos/_work/beat_block_hammer/data/episode0.hdf5`
+跑通：
+
+```text
+prepare_lerobot_aloha.py -> 1 episode / 64 frames
+validate_lerobot_aloha.py -> OpenPI pi05_aloha_robotwin transform passed
+calculate_norm_stats.py -> 写出 norm_stats.json
+build_lwd_chunks.py --horizon 10 -> 54 chunks
+visualize_lerobot_dataset.py --mode video -> 1 mp4 + 1 json
+```
+
 ## 模型结构
 
 当前 critic 参考了 pi0.6* 相关开源实现中的 value model 思路，并复用现有 ReCap/value model 的视觉语言编码链路：
@@ -334,16 +579,19 @@ export RLINF_TOKENIZER_PATH=$RLINF_GEMMA3_PATH
 ```text
 examples/lwd/hope/robotwin_lwd_critic_smoke_8a100.hope
 examples/lwd/hope/robotwin_lwd_critic_train_8a100.hope
+examples/lwd/scripts/train_lwd_critic_cloud.sh
 ```
 
-建议先跑 smoke 文件，确认 import、dataloader、FSDP 初始化和一次 eval 都能跑通；
-再提交正式训练文件。正式配置默认使用 8 卡：
+hope 文件只负责云端资源、docker、failover 等平台配置；真正的环境变量、
+离线 cache、import 检查、训练命令和自动 resume 逻辑都在
+`train_lwd_critic_cloud.sh` 里。建议先跑 smoke 文件，确认 import、dataloader、
+FSDP 初始化和一次 eval 都能跑通；再提交正式训练文件。正式配置默认使用 8 卡：
 
 ```yaml
 runner:
   max_steps: 8000
   val_check_interval: 500
-  save_interval: 2000
+  save_interval: 1000
 actor:
   micro_batch_size: 4
   global_batch_size: 64
@@ -372,10 +620,20 @@ checkpoint 会按实验名写在：
 ${RLINF_LWD_LOG_ROOT}/<experiment_name>/
 ```
 
-恢复训练时把 `runner.resume_dir` 指向 checkpoint 的 `global_step_*` 目录，例如：
+正式 train 模式会自动扫描最新完整 checkpoint 并追加 `runner.resume_dir`。LWD
+critic 的完整 checkpoint 需要同时包含：
+
+```text
+actor/dcp_checkpoint/.metadata
+actor/model_state_dict/full_weights.pt
+actor/target_model.pt
+```
+
+如果云端自动重启，同一个 hope 会再次执行 cloud 脚本，并从最新完整的
+`global_step_*` 继续训练。若要强制从头开始，提交前设置：
 
 ```bash
-runner.resume_dir=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_2000
+export RLINF_FORCE_RESTART=1
 ```
 
 ### pi0.5 hammer50 50 条数据 SFT
@@ -429,7 +687,7 @@ examples/sft/config/robotwin_sft_openpi_pi05_hammer50_cloud.yaml
 runner:
   max_steps: 10000
   val_check_interval: -1
-  save_interval: 1000
+  save_interval: 500
   logger:
     experiment_name: pi05_hammer50_overfit50_10k_v1
 
@@ -498,7 +756,12 @@ hammer50 smoke/train hope 会在启动训练前检查这个文件是否存在，
 ```text
 examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope
 examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope
+examples/sft/scripts/train_pi05_hammer50_cloud.sh
 ```
+
+hope 文件只保留云端资源、docker、failover 等平台配置；conda 环境、离线缓存、
+OpenPI tokenizer 检查、训练命令和自动 resume 逻辑都在
+`train_pi05_hammer50_cloud.sh` 里。
 
 建议先提交 smoke：
 
@@ -519,10 +782,25 @@ checkpoint 会保存到：
 ${RLINF_PI05_LOG_ROOT}/<experiment_name>/checkpoints/global_step_<N>/actor
 ```
 
+正式 train 模式会自动扫描最新完整 checkpoint 并追加 `runner.resume_dir`。pi0.5
+SFT 的完整 checkpoint 需要同时包含：
+
+```text
+actor/dcp_checkpoint/.metadata
+actor/model_state_dict/full_weights.pt
+```
+
+如果云端自动重启，同一个 hope 会再次执行 cloud 脚本，并从最新完整的
+`global_step_*` 继续训练。若要强制从头开始，提交前设置：
+
+```bash
+export RLINF_FORCE_RESTART=1
+```
+
 当前 embodied SFT worker 没有实现单独 eval，所以 SFT 训练中主要看
-`train/loss` 是否继续下降、checkpoint 是否每 1000 step 正常保存。闭环效果需要
+`train/loss` 是否继续下降、checkpoint 是否每 500 step 正常保存。闭环效果需要
 后续用 rollout/eval 脚本验证；建议先用训练集 seeds 做 `total_num_envs<=4` 的快速
-评估，再对候选 checkpoint 开启 `record_chunk_frames=true` 生成完整视频。
+评估，再对候选 checkpoint 开启 `record_internal_camera=true` 生成完整视频。
 
 ### 当前 FSDP 边界
 
@@ -572,7 +850,15 @@ sharded EMA target，而不是直接把当前配置切过去。
 
 8. 补齐了 pi0.5 hammer50 quick SFT 云端入口
 
-   新增 `robotwin_sft_openpi_pi05_hammer50_cloud.yaml` 和对应 8A100 smoke/train hope 文件，用 50 条 hammer success demo 只微调 action expert，便于在 critic 后续实验前快速得到一个 actor baseline。
+   新增 `robotwin_sft_openpi_pi05_hammer50_cloud.yaml` 和对应 8A100 smoke/train hope 文件，用 50 条 hammer success demo 做 pi0.5 full finetuning，便于在 critic 后续实验前快速得到一个 actor baseline。
+
+9. 统一了 RoboTwin eval 视频语义
+
+   评估视频改为 RoboTwin 内部相机录制：模型仍一次输出 `[B, 50, 14]`，环境仍按完整 chunk 做 TOPP 执行，录像只在已有 physics step 后读取相机帧，不再使用会改变执行语义的拆 chunk 视频路径。
+
+10. 合并了 Robotwin 数据闭环说明
+
+   数据转换、校验、norm stats、pi0.5 SFT、LWD chunk 索引和视频建议已经统一放进本文档，删除单独说明文件，避免后续两份文档不一致。
 
 ## 当前边界
 

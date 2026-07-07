@@ -12,38 +12,7 @@ workers = 1
 worker.memory = 470000
 worker.vcore = 24
 worker.gcores80g = 8
-worker.script = set -exo pipefail && \
-    source /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/Miniforge/bin/activate && \
-    conda activate rlinf_lwd && \
-    export REPO_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf && \
-    export EMBODIED_PATH=$REPO_PATH/examples/sft && \
-    export RLINF_PI05_DATA_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_pi05_quick && \
-    export RLINF_PI05_MODEL_PATH=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/rlinf_pi05_pytorch/pi05_base_hammer50 && \
-    export RLINF_PI05_NORM_STATS_PATH=$RLINF_PI05_DATA_ROOT/beat_block_hammer_success_50_train/norm_stats.json && \
-    export RLINF_PI05_LOG_ROOT=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft && \
-    export OPENPI_DATA_HOME=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights && \
-    export TORCH_HOME=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/torch && \
-    export HF_HOME=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/huggingface && \
-    export HF_DATASETS_CACHE=$HF_HOME/datasets && \
-    export TRANSFORMERS_OFFLINE=1 && \
-    export HF_HUB_OFFLINE=1 && \
-    export WANDB_MODE=offline && \
-    export TOKENIZERS_PARALLELISM=false && \
-    export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 && \
-    export NCCL_DEBUG=WARN && \
-    export RAY_DEDUP_LOGS=0 && \
-    export PYTHONPATH=$REPO_PATH:$PYTHONPATH && \
-    cd $REPO_PATH && \
-    (ray stop -f || true) && \
-    python -c "from pathlib import Path; import os; p = Path(os.environ['OPENPI_DATA_HOME']) / 'big_vision' / 'paligemma_tokenizer.model'; assert p.is_file(), f'missing OpenPI tokenizer cache: {p}'" && \
-    python -c "import openpi, lerobot; from transformers import AutoTokenizer; from rlinf.models.embodiment.openpi import get_model; print('pi05 sft imports ok')" && \
-    python examples/sft/train_vla_sft.py \
-      --config-name robotwin_sft_openpi_pi05_hammer50_cloud \
-      actor.micro_batch_size=1 \
-      actor.global_batch_size=8 \
-      runner.max_steps=10 \
-      runner.save_interval=10 \
-      runner.logger.experiment_name=pi05_hammer50_full_smoke10
+worker.script = bash /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/RLinf/examples/sft/scripts/train_pi05_hammer50_cloud.sh smoke
 
 [user_args]
 
@@ -60,7 +29,7 @@ afo.docker.image.name = registry-offlinebiz.sankuai.com/custom_prod/com.sankuai.
 afo.data.prefetch=false
 
 [failover]
-afo.app.support.engine.failover = false
+afo.app.support.engine.failover = true
 afo.afo-base.image.version = master
 afo.use.hadoop.client = true
 afo.network.mode = RDMA

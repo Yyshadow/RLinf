@@ -28,7 +28,7 @@ runner:
   max_epochs: -1
   max_steps: 10000
   val_check_interval: -1
-  save_interval: 1000
+  save_interval: 500
   resume_dir: null
 
 data:
