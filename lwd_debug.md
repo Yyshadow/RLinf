@@ -472,3 +472,26 @@ export RLINF_FORCE_RESTART=1
 4. 打开 `afo.app.support.engine.failover = true`，平台重启和 RLinf resume 配合使用。
 5. 正式 pi0.5 保存间隔改为 500 step，LWD critic 保存间隔改为 1000 step，
    减少机器异常时损失的训练进度。
+
+### 2026-07-07 补充：`CONDA_ENV=smoke` 云端变量冲突
+
+第一次提交拆分后的 smoke hope 时，stderr 里只有：
+
+```text
+EnvironmentNameNotFound: Could not find conda environment: smoke
+```
+
+原因不是缺少名为 `smoke` 的 conda 环境，而是 cloud 脚本内部变量原来叫
+`CONDA_ENV`，这个名字在云端运行环境里可能已经被平台或提交参数污染成了
+`smoke`。脚本执行到 `conda activate "${CONDA_ENV}"` 时就变成了
+`conda activate smoke`。
+
+已修复为：
+
+```bash
+RLINF_CONDA_ENV_NAME="${RLINF_CONDA_ENV_NAME:-${RLINF_CONDA_ENV:-rlinf_lwd}}"
+conda activate "${RLINF_CONDA_ENV_NAME}"
+```
+
+后续如果要覆盖 conda 环境，使用 `RLINF_CONDA_ENV_NAME` 或兼容旧写法
+`RLINF_CONDA_ENV`；不要在 hope 或云端环境里依赖裸的 `CONDA_ENV`。

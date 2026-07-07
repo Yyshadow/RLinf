@@ -6,10 +6,10 @@ MODE="${1:-train}"
 
 CLOUD_ROOT="/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122"
 CONDA_ROOT="${RLINF_CONDA_ROOT:-${CLOUD_ROOT}/Miniforge}"
-CONDA_ENV="${RLINF_CONDA_ENV:-rlinf_lwd}"
+RLINF_CONDA_ENV_NAME="${RLINF_CONDA_ENV_NAME:-${RLINF_CONDA_ENV:-rlinf_lwd}}"
 
 source "${CONDA_ROOT}/bin/activate"
-conda activate "${CONDA_ENV}"
+conda activate "${RLINF_CONDA_ENV_NAME}"
 
 export REPO_PATH="${REPO_PATH:-${CLOUD_ROOT}/RLinf}"
 export EMBODIED_PATH="${REPO_PATH}/examples/sft"

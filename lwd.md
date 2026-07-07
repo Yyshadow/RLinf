@@ -586,6 +586,8 @@ hope 文件只负责云端资源、docker、failover 等平台配置；真正的
 离线 cache、import 检查、训练命令和自动 resume 逻辑都在
 `train_lwd_critic_cloud.sh` 里。建议先跑 smoke 文件，确认 import、dataloader、
 FSDP 初始化和一次 eval 都能跑通；再提交正式训练文件。正式配置默认使用 8 卡：
+脚本内部使用 `RLINF_CONDA_ENV_NAME` 作为 conda 环境变量名，默认值是
+`rlinf_lwd`；不要使用裸的 `CONDA_ENV`，云端运行环境可能已经占用了这个变量。
 
 ```yaml
 runner:
@@ -761,7 +763,9 @@ examples/sft/scripts/train_pi05_hammer50_cloud.sh
 
 hope 文件只保留云端资源、docker、failover 等平台配置；conda 环境、离线缓存、
 OpenPI tokenizer 检查、训练命令和自动 resume 逻辑都在
-`train_pi05_hammer50_cloud.sh` 里。
+`train_pi05_hammer50_cloud.sh` 里。脚本内部使用 `RLINF_CONDA_ENV_NAME`
+作为 conda 环境变量名，默认值是 `rlinf_lwd`；不要使用裸的 `CONDA_ENV`，
+云端运行环境可能已经占用了这个变量。
 
 建议先提交 smoke：
 
