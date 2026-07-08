@@ -812,6 +812,19 @@ is_lora: false
 走普通全量参数路径。修复后重新提交 smoke 即可继续验证后续模型加载和
 forward/backward。
 
+### 进一步根治
+
+后续 `stdout.20260708161034` 里打印出的 Hydra 配置仍然没有
+`actor.model.is_lora`，说明云端实际运行的配置还没有包含本地这次 YAML 修复。
+为了避免任何旧 config 或新增 config 再触发同类问题，模型工厂入口也改成：
+
+```python
+cfg.get("is_lora", False)
+```
+
+也就是：只有显式写了 `is_lora: true` 才启用 LoRA；没有写时默认全量模型路径。
+这和 RLinf 的模型配置语义更一致，也能避免 Hydra struct 模式下访问缺失字段报错。
+
 ## 2026-07-08：QAM smoke 后续隐患排查
 
 ### 已确认不是问题的部分
