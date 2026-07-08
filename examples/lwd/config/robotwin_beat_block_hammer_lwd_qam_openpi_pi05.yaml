@@ -84,6 +84,7 @@ actor:
 
   model:
     model_type: openpi
+    is_lora: false
     model_path: ${oc.env:RLINF_QAM_ACTOR_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000}
     precision: null
     num_action_chunks: 50

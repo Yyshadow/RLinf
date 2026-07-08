@@ -773,3 +773,128 @@ train_expert_only: false
 也就是先验证 LWD offline 风格的全量 actor QAM。训练输出保存到
 `RLINF_QAM_LOG_ROOT/robotwin_beat_block_hammer_lwd_qam_openpi_pi05/checkpoints`，
 默认每 500 step 保存一次，用于后续和 SFT baseline 做闭环 eval 对比。
+
+## 2026-07-08：QAM smoke actor.model 缺少 is_lora
+
+### 现象
+
+QAM smoke 已经通过了路径检查，日志里可以看到：
+
+```text
+lwd qam imports ok
+QAM actor/reference/critic 路径均解析到预期 checkpoint
+```
+
+但 worker 初始化 actor 时失败：
+
+```text
+omegaconf.errors.ConfigAttributeError: Key 'is_lora' is not in struct
+full_key: actor.model.is_lora
+```
+
+### 原因
+
+`rlinf.models.get_model()` 是所有模型共用入口。模型实例化完成后，它会读取
+`cfg.is_lora` 判断是否接 LoRA。critic 的 config 已经有 `is_lora: false`，但
+QAM 新增的 OpenPI actor config 漏了这个 RLinf 公共字段，所以 Hydra struct 模式下
+访问 `actor.model.is_lora` 会直接报错。
+
+### 修复
+
+在 `examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05.yaml`
+的 `actor.model` 下补充：
+
+```yaml
+is_lora: false
+```
+
+这个字段不改变 QAM 算法，也不会启用 LoRA，只是显式告诉 RLinf 模型工厂当前 actor
+走普通全量参数路径。修复后重新提交 smoke 即可继续验证后续模型加载和
+forward/backward。
+
+## 2026-07-08：QAM smoke 后续隐患排查
+
+### 已确认不是问题的部分
+
+1. hope 和 conda 激活
+
+   `stdout.20260708144145` 里已经打印出：
+
+   ```text
+   Using python: .../Miniforge/envs/rlinf_lwd/bin/python
+   lwd qam imports ok
+   ```
+
+   说明当前 smoke 已经进入云端 Python 环境和 RLinf import 阶段。当前报错不是
+   `worker.script` 后面是否带 `smoke`、也不是 conda 激活失败。
+
+2. actor/reference/critic 路径形态
+
+   OpenPI loader 支持：
+
+   ```text
+   global_step_xxx/actor/model_state_dict/full_weights.pt
+   model_state_dict/full_weights.pt
+   ```
+
+   因此 SFT actor 使用 `global_step_10000`，critic 使用 `global_step_8000/actor`
+   是符合当前 loader 契约的。cloud script 也会提前检查这些文件，避免路径写错后
+   进入很晚才失败的模型构建阶段。
+
+3. QAM policy input 和 critic input 的空间
+
+   QAM dataset 给 OpenPI 的 policy view 是原始 `images/state/prompt`，会走
+   `AlohaInputs -> Normalize -> model_transforms`；给 critic 的 action chunk 则是
+   pi0.5 归一化 action。两者都使用同一套 pi05 norm stats，因此当前没有发现
+   action 空间或 state 空间错位。
+
+### 本次补充的代码检查
+
+1. batch 并行契约
+
+   QAM worker 现在显式检查：
+
+   ```text
+   actor.global_batch_size % (actor.micro_batch_size * world_size) == 0
+   ```
+
+   当前 smoke/train 配置是 `global_batch_size=8, micro_batch_size=1, world_size=8`，
+   所以每步正好一个 micro batch。这个检查是为了避免以后改 GPU 数或 batch size
+   时，`gradient_accumulation` 变成错误值，导致训练循环后面才出现难读的报错。
+
+2. QAM 数学契约
+
+   `algorithm.qam_num_denoise_steps` 必须至少为 2，因为当前实现会跳过 OpenPI flow
+   的端点 `t=1`，只在内部 denoise state 上做 QAM local regression。`lambda_q`
+   也必须大于 0，否则 `adjoint = -grad_Q / lambda_q` 没有数学意义。
+
+### 仍需关注的真实风险
+
+1. 显存风险
+
+   QAM worker 会同时驻留三套模型：
+
+   ```text
+   current actor: 需要训练和保存 optimizer
+   reference actor: 冻结，但需要保留 x_t -> x_next 的伴随梯度图
+   frozen critic: 需要对 action 输入求 ∇a Q
+   ```
+
+   当前 FSDP 配置是 `sharding_strategy: no_shard`，所以每张 GPU 都会放完整模型。
+   8x80G 大概率可以做 smoke，但正式 `qam_num_denoise_steps=10` 会比普通 SFT 更吃
+   显存。如果下一次日志变成 CUDA OOM，优先把正式训练的
+   `algorithm.qam_num_denoise_steps` 从 10 降到 4 或 6 做验证，而不是先改算法方向。
+
+2. 训练有效性风险
+
+   当前 QAM 默认使用：
+
+   ```yaml
+   qam_critic_grad_mode: mean
+   qam_clip_action_for_critic: false
+   anchor_weight: 0.05
+   bc_weight: 0.1
+   ```
+
+   这是为了先验证 frozen critic 是否能给 actor 提供有用方向。是否真正提升策略，
+   仍然要看后续 RoboTwin eval success rate 和视频，而不能只看 `q_mean` 是否上升。

@@ -54,11 +54,15 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
 
         self.data_loader = self.build_dataloader()
         self.data_iter = iter(self.data_loader)
-        self.gradient_accumulation = (
-            self.cfg.actor.global_batch_size
-            // self.cfg.actor.micro_batch_size
-            // self._world_size
-        )
+        global_batch_size = int(self.cfg.actor.global_batch_size)
+        micro_batch_size = int(self.cfg.actor.micro_batch_size)
+        per_step_batch = micro_batch_size * self._world_size
+        if global_batch_size % per_step_batch != 0:
+            raise ValueError(
+                "actor.global_batch_size must be divisible by "
+                "actor.micro_batch_size * world_size for LWD QAM training."
+            )
+        self.gradient_accumulation = global_batch_size // per_step_batch
         self.reference_model = None
         self.critic_model = None
         self.global_step = 0
@@ -244,6 +248,10 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
         replay_actions = batch["action_chunk"].float()
         num_steps = int(self.cfg.algorithm.get("qam_num_denoise_steps", 10))
         lambda_q = float(self.cfg.algorithm.get("lambda_q", 2.0))
+        if num_steps < 2:
+            raise ValueError("algorithm.qam_num_denoise_steps must be at least 2.")
+        if lambda_q <= 0:
+            raise ValueError("algorithm.lambda_q must be positive.")
         qam_loss_weight = float(self.cfg.algorithm.get("qam_loss_weight", 1.0))
         anchor_weight = float(self.cfg.algorithm.get("anchor_weight", 0.05))
         bc_weight = float(self.cfg.algorithm.get("bc_weight", 0.1))
