@@ -911,3 +911,56 @@ cfg.get("is_lora", False)
 
    这是为了先验证 frozen critic 是否能给 actor 提供有用方向。是否真正提升策略，
    仍然要看后续 RoboTwin eval success rate 和视频，而不能只看 `q_mean` 是否上升。
+
+## 2026-07-08：QAM smoke critic checkpoint loader 路径类型问题
+
+### 现象
+
+`stdout.20260708163627` 里，`actor.model.is_lora` 已经出现在 Hydra 配置中，
+actor FSDP 也初始化完成，说明上一轮 `is_lora` 问题已经解决。新的失败发生在
+加载 frozen LWD critic：
+
+```text
+AttributeError: 'str' object has no attribute 'is_file'
+```
+
+位置是：
+
+```text
+rlinf/models/embodiment/value_model/checkpoint_utils.py
+load_state_dict_from_checkpoint()
+```
+
+### 原因
+
+QAM config 里的 `critic.model.model_path` 是字符串路径：
+
+```text
+.../checkpoints/global_step_8000/actor
+```
+
+但 `load_state_dict_from_checkpoint()` 原来只按 `pathlib.Path` 使用它，直接调用
+`checkpoint_path.is_file()`。此外，即使先转成 `Path`，这个函数也只会找目录下
+直接存在的 `*.pt` 或 `*.safetensors`，而 RLinf FSDP 保存的完整权重在：
+
+```text
+actor/model_state_dict/full_weights.pt
+```
+
+也就是 checkpoint 目录的子目录里。
+
+### 修复
+
+`load_state_dict_from_checkpoint()` 现在支持：
+
+```text
+str 或 pathlib.Path
+model_state_dict/full_weights.pt
+actor/model_state_dict/full_weights.pt
+目录下直接的 *.pt / *.pth / *.safetensors
+单文件 *.pt / *.pth / *.safetensors
+```
+
+这样 QAM 传入 `global_step_8000/actor` 时，会自动解析到
+`global_step_8000/actor/model_state_dict/full_weights.pt`。这属于 checkpoint
+加载契约修复，不改变 critic 模型结构或 QAM 算法。

@@ -27,7 +27,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-def load_state_dict_from_checkpoint(checkpoint_path: pathlib.Path) -> dict:
+def load_state_dict_from_checkpoint(checkpoint_path: pathlib.Path | str) -> dict:
     """Load state dict from checkpoint directory or file.
 
     Supports:
@@ -42,6 +42,7 @@ def load_state_dict_from_checkpoint(checkpoint_path: pathlib.Path) -> dict:
     Returns:
         Combined state dict from all files
     """
+    checkpoint_path = pathlib.Path(checkpoint_path)
     if checkpoint_path.is_file():
         if str(checkpoint_path).endswith(".safetensors"):
             return safetensors.torch.load_file(str(checkpoint_path), device="cpu")
@@ -49,6 +50,14 @@ def load_state_dict_from_checkpoint(checkpoint_path: pathlib.Path) -> dict:
             return torch.load(
                 str(checkpoint_path), map_location="cpu", weights_only=False
             )
+
+    full_weights_path = checkpoint_path / "model_state_dict" / "full_weights.pt"
+    actor_full_weights_path = (
+        checkpoint_path / "actor" / "model_state_dict" / "full_weights.pt"
+    )
+    for path in (full_weights_path, actor_full_weights_path):
+        if path.exists():
+            return torch.load(str(path), map_location="cpu", weights_only=False)
 
     safetensor_files = sorted(glob.glob(str(checkpoint_path / "*.safetensors")))
     if safetensor_files:
