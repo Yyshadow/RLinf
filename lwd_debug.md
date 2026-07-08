@@ -1035,3 +1035,59 @@ sample_actions()
 
 这不是 QAM 数学问题，而是 OpenPI wrapper 的设备一致性修复。修复后 QAM smoke
 应该继续推进到 critic action gradient 或 backward 阶段。
+
+## 2026-07-08：QAM smoke OpenPI 内部 action dim 与 critic action dim 不一致
+
+### 现象
+
+`stdout.20260708171824` 已经通过 token 设备一致性检查，进入 OpenPI `embed_suffix()`。
+新的错误是：
+
+```text
+RuntimeError: mat1 and mat2 shapes cannot be multiplied (50x14 and 32x1024)
+```
+
+traceback 位于：
+
+```text
+OpenPI nft_forward()
+  -> get_velocity()
+  -> get_suffix_out()
+  -> embed_suffix()
+  -> action_in_proj(noisy_actions)
+```
+
+### 原因
+
+RoboTwin/Aloha 环境动作是 14 维：
+
+```text
+left arm 6 + left gripper 1 + right arm 6 + right gripper 1
+```
+
+LWD critic 也是在这个 14 维 pi0.5 归一化 action chunk 上训练的。但 pi0.5
+OpenPI action expert 内部使用 padded action space，`action_in_proj` 期待的是
+32 维输入。普通 rollout 最终只把前 14 维通过 output transform 给环境，但 flow
+denoise 过程本身是在 32 维 action space 上运行。
+
+QAM 之前直接用 replay action 的 `[B, 50, 14]` 作为 reference flow 的 `x_t`，
+所以传到 `action_in_proj` 时和 `32 -> 1024` 的线性层不匹配。
+
+### 修复
+
+QAM worker 现在显式区分两个 action space：
+
+```text
+model action space: 32 维，用于 OpenPI flow / NFT velocity / QAM adjoint
+env critic action space: 14 维，用于 LWD critic 评分
+```
+
+具体做法：
+
+1. reference flow rollout 从 `action_in_proj.in_features` 读取内部 action dim，并用 `[B, 50, 32]` 的 internal action。
+2. replay BC target 从 14 维 pad 到 32 维。
+3. critic 查询前从 internal endpoint 切前 14 维。
+4. critic action gradient 仍然对 32 维 endpoint 求导，后 18 维自然是 0。
+
+这样 QAM 对接的是 OpenPI 真正的 flow 内部空间，同时 critic 仍然只看自己训练过的
+14 维动作空间。

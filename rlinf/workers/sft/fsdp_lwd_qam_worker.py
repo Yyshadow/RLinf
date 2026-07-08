@@ -246,6 +246,11 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
         policy_inputs = batch["policy_inputs"]
         critic_observation = batch["critic_observation"]
         replay_actions = batch["action_chunk"].float()
+        env_action_dim = replay_actions.shape[-1]
+        model_action_dim = self._model_action_dim()
+        internal_action_shape = torch.Size(
+            (*replay_actions.shape[:-1], model_action_dim)
+        )
         num_steps = int(self.cfg.algorithm.get("qam_num_denoise_steps", 10))
         lambda_q = float(self.cfg.algorithm.get("lambda_q", 2.0))
         if num_steps < 2:
@@ -267,16 +272,19 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
 
         transitions = self._rollout_reference_flow(
             policy_inputs=policy_inputs,
-            action_shape=replay_actions.shape,
+            action_shape=internal_action_shape,
             num_steps=num_steps,
             dtype=replay_actions.dtype,
         )
         endpoint = transitions[-1]["x_next"].detach().requires_grad_(True)
+        critic_endpoint = self._slice_env_action(endpoint, env_action_dim)
         endpoint_saturation_frac = (
-            ((endpoint < -1.0) | (endpoint > 1.0)).float().mean()
+            ((critic_endpoint < -1.0) | (critic_endpoint > 1.0)).float().mean()
         )
         critic_action = (
-            endpoint.clamp(-1.0, 1.0) if clip_action_for_critic else endpoint
+            critic_endpoint.clamp(-1.0, 1.0)
+            if clip_action_for_critic
+            else critic_endpoint
         )
         q_out = self.critic_model(
             observation=critic_observation,
@@ -334,7 +342,7 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
 
         qam_loss = torch.stack(qam_losses).mean()
         anchor_loss = torch.stack(anchor_losses).mean()
-        bc_loss = self._bc_flow_loss(policy_inputs, replay_actions)
+        bc_loss = self._bc_flow_loss(policy_inputs, replay_actions, model_action_dim)
         loss = (
             qam_loss_weight * qam_loss
             + anchor_weight * anchor_loss
@@ -354,8 +362,8 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             adjoint_norm=torch.stack(adjoint_norms).mean().detach(),
             qam_delta_norm=torch.stack(delta_norms).mean().detach(),
             qam_delta_clip_frac=torch.stack(delta_clip_fracs).mean().detach(),
-            endpoint_min=endpoint.detach().amin(),
-            endpoint_max=endpoint.detach().amax(),
+            endpoint_min=critic_endpoint.detach().amin(),
+            endpoint_max=critic_endpoint.detach().amax(),
             endpoint_saturation_frac=endpoint_saturation_frac.detach(),
             critic_action_min=critic_action.detach().amin(),
             critic_action_max=critic_action.detach().amax(),
@@ -426,7 +434,9 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
         self,
         policy_inputs: dict[str, Any],
         replay_actions: torch.Tensor,
+        model_action_dim: int,
     ) -> torch.Tensor:
+        replay_actions = self._pad_action_chunk(replay_actions, model_action_dim)
         batch_size = replay_actions.shape[0]
         noise = torch.randn_like(replay_actions)
         timestep = torch.rand(
@@ -442,6 +452,33 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
         target_velocity = noise - replay_actions
         v_theta = self._policy_velocity(self.model, policy_inputs, x_t, timestep)
         return bc_flow_matching_loss(v_theta, target_velocity)
+
+    def _model_action_dim(self) -> int:
+        model = self.reference_model
+        if model is None:
+            model = getattr(self.model, "module", self.model)
+        action_in_proj = getattr(model, "action_in_proj", None)
+        if action_in_proj is not None:
+            return int(action_in_proj.in_features)
+        return int(model.config.action_dim)
+
+    @staticmethod
+    def _pad_action_chunk(action_chunk: torch.Tensor, action_dim: int) -> torch.Tensor:
+        current_dim = action_chunk.shape[-1]
+        if current_dim == action_dim:
+            return action_chunk
+        if current_dim > action_dim:
+            raise ValueError(
+                f"action chunk dim {current_dim} exceeds model action dim {action_dim}."
+            )
+        return F.pad(action_chunk, (0, action_dim - current_dim))
+
+    @staticmethod
+    def _slice_env_action(
+        action_chunk: torch.Tensor,
+        env_action_dim: int,
+    ) -> torch.Tensor:
+        return action_chunk[..., :env_action_dim]
 
     def _policy_velocity(
         self,
