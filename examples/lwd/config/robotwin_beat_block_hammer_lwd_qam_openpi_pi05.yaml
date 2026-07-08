@@ -57,7 +57,7 @@ data:
 algorithm:
   reference_model_path: ${oc.env:RLINF_QAM_REFERENCE_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000}
   lambda_q: 2.0
-  qam_num_denoise_steps: 10
+  qam_num_denoise_steps: 4
   qam_critic_grad_mode: mean
   qam_clip_action_for_critic: false
   qam_loss_weight: 1.0
@@ -89,7 +89,7 @@ actor:
     precision: null
     num_action_chunks: 50
     action_dim: 14
-    num_steps: 10
+    num_steps: 5
     add_value_head: false
     openpi:
       config_name: pi05_aloha_robotwin
