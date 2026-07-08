@@ -321,6 +321,22 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         outputs["actions"] = outputs["actions"][:, : self.config.action_chunk]
         return outputs
 
+    def _move_policy_tensors_to_device(
+        self,
+        images,
+        img_masks,
+        lang_tokens,
+        lang_masks,
+        state,
+        device: torch.device,
+    ):
+        images = [img.to(device) for img in images]
+        img_masks = [img_mask.to(device) for img_mask in img_masks]
+        lang_tokens = lang_tokens.to(device)
+        lang_masks = lang_masks.to(device)
+        state = state.to(device)
+        return images, img_masks, lang_tokens, lang_masks, state
+
     def forward(self, forward_type=ForwardType.DEFAULT, **kwargs):
         if forward_type == ForwardType.SFT:
             return self.sft_forward(**kwargs)
@@ -430,10 +446,19 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             self._preprocess_observation(observation, train=False)
         )
         # transfer to device
-        device = chains.device
-        images = [img.to(device) for img in images]
-        img_masks = [img_mask.to(device) for img_mask in img_masks]
-        state = state.to(device)
+        device = next(self.parameters()).device
+        chains = chains.to(device)
+        denoise_inds = denoise_inds.to(device)
+        images, img_masks, lang_tokens, lang_masks, state = (
+            self._move_policy_tensors_to_device(
+                images,
+                img_masks,
+                lang_tokens,
+                lang_masks,
+                state,
+                device,
+            )
+        )
         # get log prob
         log_probs, value_t, entropy = self.get_log_prob_value(
             images,
@@ -477,9 +502,16 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         )
         # move device
         device = next(self.parameters()).device
-        images = [img.to(device) for img in images]
-        img_masks = [m.to(device) for m in img_masks]
-        state = state.to(device)
+        images, img_masks, lang_tokens, lang_masks, state = (
+            self._move_policy_tensors_to_device(
+                images,
+                img_masks,
+                lang_tokens,
+                lang_masks,
+                state,
+                device,
+            )
+        )
         # nft inputs
         nft_inputs = kwargs["nft_inputs"]
         x_t = nft_inputs["x_t"].to(device)
@@ -639,17 +671,27 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
     ) -> torch.Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
         bsize = observation.state.shape[0]
-        device = observation.state.device
+        device = next(self.parameters()).device
         num_steps = self.config.num_steps
         if noise is None:
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
             noise = self.sample_noise(actions_shape, device)
         else:
             # DSRL: SAC provides noise, convert dtype to match action_in_proj
-            noise = noise.to(self.action_in_proj.weight.dtype)
+            noise = noise.to(device=device, dtype=self.action_in_proj.weight.dtype)
 
         images, img_masks, lang_tokens, lang_masks, state = (
             self._preprocess_observation(observation, train=False)
+        )
+        images, img_masks, lang_tokens, lang_masks, state = (
+            self._move_policy_tensors_to_device(
+                images,
+                img_masks,
+                lang_tokens,
+                lang_masks,
+                state,
+                device,
+            )
         )
 
         prefix_output, prefix_pad_masks, past_key_values = self._build_prefix_cache(

@@ -964,3 +964,74 @@ actor/model_state_dict/full_weights.pt
 这样 QAM 传入 `global_step_8000/actor` 时，会自动解析到
 `global_step_8000/actor/model_state_dict/full_weights.pt`。这属于 checkpoint
 加载契约修复，不改变 critic 模型结构或 QAM 算法。
+
+## 2026-07-08：QAM smoke OpenPI NFT token 设备不一致
+
+### 现象
+
+`stdout.20260708164833` 已经进入 `run_training()`，说明 actor 初始化、reference
+初始化、critic checkpoint 加载都已经通过。新的失败发生在 QAM 第一个 batch 的
+reference flow rollout：
+
+```text
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu
+```
+
+traceback 位于：
+
+```text
+FSDPLWDQAMWorker.compute_qam_loss()
+  -> _rollout_reference_flow()
+  -> _policy_velocity()
+  -> OpenPI nft_forward()
+  -> _build_prefix_cache()
+  -> embed_language_tokens()
+```
+
+### 原因
+
+OpenPI wrapper 的 `nft_forward()` 会先调用 `input_transform()`，这个 transform
+生成的是 CPU tensor。原实现只把：
+
+```text
+images
+image masks
+state
+```
+
+搬到模型所在 GPU，但漏了：
+
+```text
+lang_tokens
+lang_masks
+```
+
+因此在 Gemma embedding 里出现：
+
+```text
+embedding weight: cuda
+token ids: cpu
+```
+
+QAM 使用 `ForwardType.NFT` 显式查询 OpenPI velocity field，所以这个设备契约问题
+被第一轮训练立刻触发。
+
+### 修复
+
+在 `OpenPi0ForRLActionPrediction` 中增加统一 helper，把 policy forward 所需的
+五类张量一起移动到模型设备：
+
+```text
+images, img_masks, lang_tokens, lang_masks, state
+```
+
+并在以下入口使用：
+
+```text
+default_forward()
+nft_forward()
+sample_actions()
+```
+
+这不是 QAM 数学问题，而是 OpenPI wrapper 的设备一致性修复。修复后 QAM smoke
+应该继续推进到 critic action gradient 或 backward 阶段。
