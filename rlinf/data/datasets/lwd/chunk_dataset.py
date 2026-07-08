@@ -225,6 +225,9 @@ class LWDChunkDataset(Dataset):
             "next_images": self._extract_images(next_sample),
             "prompt": self._pi05_state_prompt(prompt, state_norm),
             "next_prompt": self._pi05_state_prompt(prompt, next_state_norm),
+            "task_prompt": prompt,
+            "state": sample["observation.state"],
+            "next_state": next_sample["observation.state"],
             "action_chunk": action_chunk,
             "reward_chunk": reward_chunk,
             "done": done,
@@ -305,8 +308,12 @@ class LWDChunkDataCollator(DataCollatorMixin):
         return {
             "observation": observation,
             "next_observation": next_observation,
-            "action_chunk": torch.stack([ex["action_chunk"] for ex in examples]).float(),
-            "reward_chunk": torch.stack([ex["reward_chunk"] for ex in examples]).float(),
+            "action_chunk": torch.stack(
+                [ex["action_chunk"] for ex in examples]
+            ).float(),
+            "reward_chunk": torch.stack(
+                [ex["reward_chunk"] for ex in examples]
+            ).float(),
             "done": torch.tensor([ex["done"] for ex in examples], dtype=torch.bool),
             "success": torch.tensor(
                 [ex["success"] for ex in examples],

@@ -14,10 +14,12 @@ from .chunk_dataset import (
     LWDDataLoaderImpl,
     LWDMixtureDataset,
 )
+from .qam_dataset import LWDQAMDataCollator
 
 __all__ = [
     "LWDChunkDataCollator",
     "LWDChunkDataset",
     "LWDDataLoaderImpl",
+    "LWDQAMDataCollator",
     "LWDMixtureDataset",
 ]

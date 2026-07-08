@@ -1,0 +1,27 @@
+# Smoke test for LWD QAM policy extraction.
+
+defaults:
+  - robotwin_beat_block_hammer_lwd_qam_openpi_pi05
+  - _self_
+
+runner:
+  logger:
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_smoke
+  max_steps: 10
+  save_interval: 10
+
+data:
+  train_data_paths:
+    - dataset_path: beat_block_hammer_success_train
+      weight: 1.0
+      max_samples: 16
+  train_num_workers: 0
+  prefetch_factor: null
+  persistent_workers: false
+
+algorithm:
+  qam_num_denoise_steps: 2
+
+actor:
+  micro_batch_size: 1
+  global_batch_size: 8

@@ -512,3 +512,264 @@ smoke:
 
 这样云端平台的命令解析层不会再看到裸的 `smoke` 参数。`smoke` 只在 wrapper
 脚本内部作为 `RLINF_RUN_MODE=smoke` 使用，用来选择短步数配置。
+
+## 2026-07-07：第一版 LWD QAM policy extraction 接入
+
+### 背景
+
+此前代码已经有三块基础能力：
+
+```text
+pi0.5 SFT actor
+LWD distributional V + chunk Q critic
+RoboTwin eval / 视频诊断
+```
+
+但还缺少 LWD 论文里真正用 critic 更新 VLA 的策略提取部分。直接最大化
+`Q(s, a_chunk)` 会把梯度穿过完整 denoise 过程，计算贵且容易不稳定；只做
+advantage-weighted BC 又不适合 OpenPI 这种 flow action generator。因此这次接入
+第一版 QAM。
+
+### 当前实现
+
+新增文件：
+
+```text
+rlinf/algorithms/lwd/qam.py
+rlinf/data/datasets/lwd/qam_dataset.py
+rlinf/workers/sft/fsdp_lwd_qam_worker.py
+examples/lwd/train_lwd_qam.py
+examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05.yaml
+examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05_smoke.yaml
+examples/lwd/scripts/train_lwd_qam_cloud.sh
+examples/lwd/scripts/smoke_lwd_qam_cloud.sh
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_train_8a100.hope
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_smoke_8a100.hope
+```
+
+训练时显式区分三类模型：
+
+```text
+actor.model.model_path
+  当前要训练的 OpenPI/pi0.5 actor 初始化权重
+
+algorithm.reference_model_path
+  固定 reference actor，通常和 SFT checkpoint 一致
+
+critic.model.model_path
+  固定 LWD critic checkpoint，通常指向 .../checkpoints/global_step_xxx/actor
+```
+
+这样做是为了避免把 base package、SFT checkpoint、critic checkpoint 混成一个
+`model_path`，导致 OpenPI loader、critic loader 和 resume 语义互相污染。
+
+### QAM 训练逻辑
+
+每个 batch：
+
+```text
+1. LWDQAMDataCollator 同时产出 critic_observation 和 policy_inputs；
+2. reference actor 从 Gaussian noise 做 flow_ode rollout；
+3. LWD critic 在 reference endpoint 上计算 Q(s, a)；
+4. 对 endpoint 求 action gradient；
+5. 用 reference flow transition 的 VJP 反向解 adjoint；
+6. 当前 actor 用 ForwardType.NFT 在同一批中间 x_t/t 上预测 velocity；
+7. 优化 QAM local regression loss + 小权重 anchor loss + 小权重 BC flow loss。
+```
+
+第一版固定 critic，不和 actor 一起更新。这样 smoke 和早期实验更容易定位问题：
+如果 QAM 后闭环变差，优先排查 policy extraction 和 critic gradient，而不是
+critic/value 同时漂移。
+
+### 需要重点看的指标
+
+```text
+train/qam_loss
+train/anchor_loss
+train/bc_loss
+train/q_mean
+train/action_grad_norm
+train/adjoint_norm
+train/qam_delta_norm
+train/qam_delta_clip_frac
+train/grad_norm
+```
+
+判断方式：
+
+```text
+qam_loss 不应快速 NaN；
+action_grad_norm 不能长期为 0，否则 critic 对 action 没有有效梯度；
+qam_delta_clip_frac 如果长期接近 1，说明 Q 引导过强或 lambda/clip 太激进；
+q_mean 上升只能作为参考，最终仍要看 RoboTwin success rate 和视频。
+```
+
+### 当前边界
+
+这一版不是完整在线 LWD：
+
+```text
+没有在 QAM step 中继续训练 critic/value；
+没有接 QAM-FQL；
+没有接 edit policy；
+没有 online replay 和 autonomous rollout 混合采样；
+reference actor 固定，不做周期性更新。
+```
+
+下一步建议先跑 smoke，确认三模型加载、QAM forward/backward/save 都通过；再跑
+短训 500-2000 step，并用 `action_exec_horizon=20/30/50` 做闭环 eval 对比 SFT
+checkpoint。
+
+## 2026-07-08：QAM 第一性原理修正和当前待办
+
+### 已修正的问题
+
+1. QAM 更新方向按 OpenPI `flow_ode` 重新对齐
+
+   OpenPI 的 deterministic flow ODE 等价于：
+
+   ```text
+   x_next = x - dt * v
+   ```
+
+   因此 critic 希望最终 action 往高 Q 方向移动时，velocity 的修正方向和 action
+   endpoint 的移动方向相反。当前 `qam_vector_field_loss()` 使用
+   `v_beta - v_theta` 构造 residual，已经把这个时间方向修正进去。新增的单元测试
+   会检查：在简单一维 Q 梯度下，正确方向的 velocity loss 更低，并且 ODE step
+   确实把 endpoint 推向更高 Q 的方向。
+
+2. critic action gradient 支持 `mean|min`
+
+   当前配置新增：
+
+   ```yaml
+   algorithm:
+     qam_critic_grad_mode: mean
+   ```
+
+   `mean` 使用所有 Q heads 的均值求 action gradient，默认采用它，因为更平滑，也
+   对齐 QAM 源码里 ensemble mean 的做法。`min` 保留为 clipped double-Q 风格的
+   保守 ablation。训练日志会同时记录 `q_mean`、`q_min` 和 `q_head_gap`，用于判断
+   多个 Q heads 是否分歧过大。
+
+3. action clamp 契约显式化
+
+   当前配置新增：
+
+   ```yaml
+   algorithm:
+     qam_clip_action_for_critic: false
+   ```
+
+   QAM 源码里 clamp 是可选工程开关，LWD 论文公式本身没有强制要求查询 critic 前
+   clamp action。默认不 clamp，可以避免 endpoint 超出 `[-1, 1]` 后由于 clamp
+   饱和导致 action gradient 变成 0。若后续想做保守实验，可以打开该开关。训练日志
+   会记录 `endpoint_min/max`、`endpoint_saturation_frac` 和
+   `critic_action_min/max`，用于判断 critic 实际看到的 action 范围。
+
+4. QAM dataloader 可以跨 epoch 继续训练
+
+   之前 QAM worker 直接 `next(data_iter)`，如果 `runner.max_steps` 大于 dataloader
+   一个 epoch 的长度，训练会在 `StopIteration` 处中断。现在 worker 内部封装
+   `_next_batch()`，一个 epoch 取完后会更新 sampler epoch 并重新创建 iterator，
+   因此可以跑完整的多 epoch QAM 训练。
+
+### 当前仍建议补的诊断
+
+这些不是 QAM 本体必须条件，所以本次先不改 critic 算法，只作为后续 TODO：
+
+```text
+value_target_clamp_frac
+  统计 C51 projection 里有多少 scalar target 被 clip 到 value support 边界。
+  如果长期很高，说明 support 范围或 reward/return 尺度需要重新检查。
+
+value_entropy
+  统计 V 分布是否过早塌成尖峰，帮助判断 distributional value 是否还在表达不确定性。
+
+success/nearmiss/failed ranking
+  离线比较成功、near-miss、失败轨迹的 Q/V 排序，确认 critic 是否真的具备区分能力。
+```
+
+QAM 下一轮实验建议先固定：
+
+```text
+qam_critic_grad_mode: mean
+qam_clip_action_for_critic: false
+```
+
+跑通 smoke 后，再用同一个 critic 分别做 `mean` vs `min`、`clip=false` vs
+`clip=true` 的小规模 ablation。最终判断仍以 RoboTwin success rate 和完整视频为准，
+不要只看 `q_mean` 是否上升。
+
+## 2026-07-08：QAM 云端训练入口路径固化
+
+### 背景
+
+本轮要验证的是 frozen LWD critic 是否能通过 QAM 改进已经 SFT 过的 pi0.5 actor。
+云端实际可用 checkpoint 是：
+
+```text
+SFT actor:
+/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000
+
+LWD critic:
+/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor
+```
+
+之前 QAM cloud 脚本里的 actor 默认路径仍指向旧的
+`checkpoints/rlinf_pi05_sft/...`，容易导致云端提交后加载不到正确 SFT actor。
+
+### 本次修改
+
+1. `examples/lwd/scripts/train_lwd_qam_cloud.sh`
+
+   默认 `RLINF_QAM_ACTOR_MODEL_PATH` 改为新的
+   `checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000`。
+   `RLINF_QAM_REFERENCE_MODEL_PATH` 仍默认等于 actor path，也就是 QAM 从 SFT actor
+   初始化，并用同一个 SFT actor 作为固定 reference flow。
+
+2. `examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05.yaml`
+
+   同步更新 actor 和 reference 的默认路径，保证不用 cloud wrapper 直接启动
+   Hydra config 时也不会回到旧 checkpoint。
+
+3. cloud 脚本启动前新增最小路径检查
+
+   检查项包括：
+
+   ```text
+   actor/actor/model_state_dict/full_weights.pt
+   reference/actor/model_state_dict/full_weights.pt
+   critic/model_state_dict/full_weights.pt
+   LWD replay pi05_norm_stats.json
+   OpenPI norm_stats.json
+   big_vision/paligemma_tokenizer.model
+   ```
+
+   这些检查只用于尽早暴露路径错误，不改变训练算法。
+
+### 当前验证路线
+
+先跑：
+
+```text
+hope run examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_smoke_8a100.hope
+```
+
+smoke 通过后再跑：
+
+```text
+hope run examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_train_8a100.hope
+```
+
+第一轮仍保持：
+
+```text
+qam_critic_grad_mode: mean
+qam_clip_action_for_critic: false
+train_expert_only: false
+```
+
+也就是先验证 LWD offline 风格的全量 actor QAM。训练输出保存到
+`RLINF_QAM_LOG_ROOT/robotwin_beat_block_hammer_lwd_qam_openpi_pi05/checkpoints`，
+默认每 500 step 保存一次，用于后续和 SFT baseline 做闭环 eval 对比。

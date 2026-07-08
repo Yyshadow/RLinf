@@ -813,6 +813,148 @@ export RLINF_FORCE_RESTART=1
 后续用 rollout/eval 脚本验证；建议先用训练集 seeds 做 `total_num_envs<=4` 的快速
 评估，再对候选 checkpoint 开启 `record_internal_camera=true` 生成完整视频。
 
+## LWD QAM 策略提取
+
+QAM 是 LWD 里把 critic 变成 actor 改进信号的模块。它不是重新训练一个
+collision classifier，也不是直接对 replay action 做 advantage-weighted BC，而是用
+LWD critic 的 action gradient 指导 OpenPI/pi0.5 flow policy 的 velocity field。
+
+当前代码采用第一版离线 QAM policy extraction：
+
+```text
+f_theta: 当前要训练的 OpenPI actor
+f_beta: 固定 reference OpenPI actor，通常来自 SFT checkpoint
+Q_phi: 固定 LWD critic，来自 LWD critic checkpoint
+```
+
+每个 batch 的流程是：
+
+```text
+1. 从 LWD replay 采样状态 s；
+2. 采样 Gaussian noise，shape 为 [B, 50, 14]；
+3. 用固定 reference actor f_beta 做 flow-ODE rollout，得到 action chunk endpoint；
+4. 用 LWD critic 计算 Q_phi(s, endpoint)，并对 endpoint 求 ∇a Q；
+5. 把 terminal action gradient 作为 adjoint 初值，沿 reference flow 反向传播；
+6. 用 QAM local regression loss 更新当前 actor f_theta 的 velocity field。
+```
+
+这版 QAM 明确采用“LWD 连续 sigma + OpenPI flow_ode”的实现对象，而不是直接照搬
+`/data/wam_codebase/qam` 里 stochastic sampler 的全部采样细节。原因是当前
+pi0.5 eval 和训练主路径用的是 OpenPI 的 deterministic flow ODE：
+
+```text
+x_next = x - dt * v
+```
+
+所以 QAM residual 的方向必须按 OpenPI 的时间变量修正。直观理解是：如果 critic
+认为“把最终 action 往正方向推会更好”，那么在 `x_next = x - dt * v` 的 ODE 里，
+当前 actor 的 velocity 反而应该往负方向调整，最终 endpoint 才会往正方向移动。
+`rlinf/algorithms/lwd/qam.py` 里的 `qam_vector_field_loss()` 已按这个方向实现。
+
+critic action gradient 的聚合方式通过配置控制：
+
+```yaml
+algorithm:
+  qam_critic_grad_mode: mean   # mean|min
+  qam_clip_action_for_critic: false
+```
+
+`mean` 表示用所有 Q heads 的均值求 action gradient，默认采用它，因为梯度更平滑，
+也更接近 QAM 源码里 ensemble mean 的做法。`min` 表示用 clipped double-Q 风格的
+保守梯度，适合后续做 ablation。`qam_clip_action_for_critic` 默认是 `false`：
+QAM 源码里 clamp 是可选的工程开关，LWD 论文公式本身没有要求 action 必须在查询
+critic 前 clamp；如果打开 clamp，超出 `[-1, 1]` 的 endpoint 在边界外会出现零梯度，
+所以只建议作为诊断或保守 ablation 使用。
+
+对应代码：
+
+```text
+rlinf/algorithms/lwd/qam.py
+  # QAM loss、OpenPI flow-ODE 单步更新、sigma 和 clipping 工具
+
+rlinf/data/datasets/lwd/qam_dataset.py
+  # 同一条 LWD replay 同时产出 critic view 和 OpenPI policy view
+
+rlinf/workers/sft/fsdp_lwd_qam_worker.py
+  # 加载 current actor、reference actor、frozen LWD critic，并执行 QAM 更新
+
+examples/lwd/train_lwd_qam.py
+examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05.yaml
+examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05_smoke.yaml
+examples/lwd/scripts/train_lwd_qam_cloud.sh
+examples/lwd/scripts/smoke_lwd_qam_cloud.sh
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_train_8a100.hope
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_smoke_8a100.hope
+```
+
+云端 smoke：
+
+```bash
+hope run examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_smoke_8a100.hope
+```
+
+云端正式训练：
+
+```bash
+hope run examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_train_8a100.hope
+```
+
+默认路径通过环境变量覆盖：
+
+```bash
+export RLINF_QAM_ACTOR_MODEL_PATH=/path/to/current_actor_or_sft_checkpoint
+export RLINF_QAM_REFERENCE_MODEL_PATH=/path/to/reference_actor_or_sft_checkpoint
+export RLINF_QAM_CRITIC_MODEL_PATH=/path/to/lwd_critic_checkpoint/actor
+export RLINF_PI05_NORM_STATS_PATH=/path/to/pi05/norm_stats.json
+```
+
+当前云端 QAM 入口默认使用：
+
+```text
+RLINF_QAM_ACTOR_MODEL_PATH
+  /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000
+
+RLINF_QAM_REFERENCE_MODEL_PATH
+  默认等于 RLINF_QAM_ACTOR_MODEL_PATH
+
+RLINF_QAM_CRITIC_MODEL_PATH
+  /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor
+```
+
+`train_lwd_qam_cloud.sh` 启动前会检查 actor/reference/critic 的
+`model_state_dict/full_weights.pt`、LWD replay 的 `pi05_norm_stats.json`、OpenPI
+`norm_stats.json` 和离线 tokenizer，路径不对会直接退出。
+
+第一版默认固定 critic，不在 QAM step 里同时更新 Q/V。这样可以先验证
+“critic-guided policy extraction”是否有效，避免 actor 和 critic 同时漂移导致
+问题不可定位。等离线 QAM 跑通后，再考虑接入在线 replay 混合训练和 critic
+继续更新。
+
+QAM 训练时重点看这些日志：
+
+```text
+train/qam_loss
+train/anchor_loss
+train/bc_loss
+train/q_mean
+train/q_min
+train/q_head_gap
+train/action_grad_norm
+train/adjoint_norm
+train/qam_delta_norm
+train/qam_delta_clip_frac
+train/endpoint_min
+train/endpoint_max
+train/endpoint_saturation_frac
+train/critic_action_min
+train/critic_action_max
+```
+
+其中 `q_head_gap` 用来观察 critic 多个 Q heads 是否分歧过大；
+`endpoint_saturation_frac` 用来观察 reference actor 生成的 action endpoint 有多少
+比例超出 `[-1, 1]`；`critic_action_min/max` 用来确认 critic 实际看到的是 unclamped
+action 还是 clamp 后的 action。
+
 ### 当前 FSDP 边界
 
 LWD critic 有 EMA target critic。为了避免 FSDP flat/sharded
@@ -871,15 +1013,25 @@ sharded EMA target，而不是直接把当前配置切过去。
 
    数据转换、校验、norm stats、pi0.5 SFT、LWD chunk 索引和视频建议已经统一放进本文档，删除单独说明文件，避免后续两份文档不一致。
 
+11. 新增了第一版 LWD QAM policy extraction
+
+   当前版本可以用固定 SFT reference actor 和固定 LWD critic，对 OpenPI/pi0.5
+   actor 做 QAM velocity-field 更新。实现上显式区分 current actor、
+   reference actor 和 critic checkpoint，避免把三类权重路径混在一起。
+   QAM 更新方向已经按 OpenPI `flow_ode` 的 `x_next = x - dt * v` 约定修正；
+   critic action gradient 支持 `mean|min` 配置，默认使用更平滑的 `mean`。
+
 ## 当前边界
 
-当前版本是 critic 训练闭环，还没有实现：
+当前版本已经包含 critic 训练、pi0.5 SFT、离线 QAM policy extraction 和
+RoboTwin eval 辅助工具，但还没有实现完整在线 LWD 闭环：
 
 ```text
-actor policy update
 online rollout 后训闭环
+QAM 训练中同步更新 critic/value
+QAM-FQL 或 edit-policy 变体
 自适应 action proposal / action refinement
-更复杂的 advantage 或 policy improvement 逻辑
+critic value target clamp fraction / value entropy / ranking 诊断指标
 ```
 
 训练期间 `FSDPLWDCriticWorker.run_eval()` 会记录基础 LWD 指标。仍建议再做

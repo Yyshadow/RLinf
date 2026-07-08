@@ -1,0 +1,133 @@
+# LWD QAM policy extraction for RoboTwin beat_block_hammer with OpenPI pi0.5.
+
+defaults:
+  - model/lwd_critic@critic.model
+  - training_backend/fsdp@actor.fsdp_config
+  - _self_
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: all
+
+runner:
+  task_type: sft
+  logger:
+    log_path: ${oc.env:RLINF_QAM_LOG_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd_qam}
+    project_name: rlinf
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05
+    logger_backends: ["tensorboard"]
+  max_epochs: -1
+  max_steps: 2000
+  val_check_interval: -1
+  save_interval: 500
+  resume_dir: null
+
+data:
+  data_root: ${oc.env:RLINF_LWD_DATA_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_lwd_split}
+  train_data_paths:
+    - dataset_path: beat_block_hammer_success_train
+      weight: 1.0
+    - dataset_path: beat_block_hammer_failed_train
+      weight: 1.0
+    - dataset_path: beat_block_hammer_nearmiss_train
+      weight: 1.0
+  norm_stats_path: pi05_norm_stats.json
+  use_quantile_norm: true
+  adapt_to_pi: true
+  action_horizon: 50
+  image_keys:
+    - cam_high
+    - cam_left_wrist
+    - cam_right_wrist
+  do_augment: false
+  train_num_workers: 2
+  pin_memory: true
+  prefetch_factor: 2
+  persistent_workers: true
+  balance_weights: true
+  seed: 42
+
+algorithm:
+  reference_model_path: ${oc.env:RLINF_QAM_REFERENCE_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000}
+  lambda_q: 2.0
+  qam_num_denoise_steps: 10
+  qam_critic_grad_mode: mean
+  qam_clip_action_for_critic: false
+  qam_loss_weight: 1.0
+  qam_grad_clip: 0.05
+  qam_delta_clip: 0.2
+  anchor_weight: 0.05
+  bc_weight: 0.1
+  min_sigma: 1.0e-3
+
+critic:
+  use_critic_model: false
+  model:
+    siglip_path: ${oc.env:RLINF_SIGLIP_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/siglip2-so400m-patch14-224}
+    gemma3_path: ${oc.env:RLINF_GEMMA3_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/gemma-3-270m}
+    tokenizer_path: ${oc.env:RLINF_TOKENIZER_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/weights/pretrained/gemma-3-270m}
+    model_path: ${oc.env:RLINF_QAM_CRITIC_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor}
+
+actor:
+  group_name: LWDQAMActorGroup
+  training_backend: fsdp
+  micro_batch_size: 1
+  global_batch_size: 8
+  seed: 0
+
+  model:
+    model_type: openpi
+    model_path: ${oc.env:RLINF_QAM_ACTOR_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000}
+    precision: null
+    num_action_chunks: 50
+    action_dim: 14
+    num_steps: 10
+    add_value_head: false
+    openpi:
+      config_name: pi05_aloha_robotwin
+      norm_stats_path: ${oc.env:RLINF_PI05_NORM_STATS_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_pi05_quick/beat_block_hammer_success_50_train/norm_stats.json}
+      num_images_in_input: 3
+      action_chunk: ${actor.model.num_action_chunks}
+      action_env_dim: ${actor.model.action_dim}
+      num_steps: ${actor.model.num_steps}
+      noise_method: flow_ode
+      noise_level: 0.0
+      add_value_head: ${actor.model.add_value_head}
+      train_expert_only: false
+      detach_critic_input: true
+
+  optim:
+    lr: 1.0e-5
+    value_lr: 1.0e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-8
+    weight_decay: 1.0e-10
+    clip_grad: 1.0
+    lr_scheduler: cosine
+    lr_warmup_steps: 100
+    total_training_steps: ${runner.max_steps}
+    num_cycles: 0.5
+    min_lr: 1.0e-6
+
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard
+    use_orig_params: false
+    gradient_checkpointing: false
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+    amp_autocast:
+      enabled: false
+      precision: bf16
+    grad_scaler:
+      enabled: false
