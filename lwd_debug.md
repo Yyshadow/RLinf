@@ -1377,3 +1377,107 @@ lr                      最后约 4e-10
 下一步优先做 critic 梯度可信度诊断，而不是继续盲目放大 QAM。若
 `q_cur_minus_ref` 仍接近 0，则优先考虑继续增强引导强度，例如适度提高
 `qam_grad_clip` 或继续降低 `lambda_q`，但每次只改一个主变量。
+
+## 2026-07-09：QAM qstrong_lq05 结果和 probe_lq01_gc01 短实验
+
+### qstrong_lq05 结果
+
+`global_step_1500` 的 QAM 训练已经稳定跑完，checkpoint 结构完整：
+
+```text
+global_step_1500/actor/dcp_checkpoint/.metadata
+global_step_1500/actor/model_state_dict/full_weights.pt
+```
+
+关键 TensorBoard 指标：
+
+```text
+bc_loss                     0
+lr last                     2e-6
+adjoint_norm mean           约 0.00586
+qam_delta_clip_frac mean    约 4.17e-05
+cur_ref_endpoint_l2 mean    约 0.099
+q_cur_minus_ref mean        约 -6.4e-05
+q_cur_minus_ref positive    约 42.7%
+```
+
+这说明 `lambda_q=0.5` 和 constant lr 都生效了，QAM 训练没有坏掉；但 current actor
+endpoint 只小幅偏离 frozen reference，而且 critic 并没有稳定认为 current endpoint
+更好。第一性原理上，这一轮卡在：
+
+```text
+critic gradient 存在
+-> QAM adjoint 存在
+-> actor endpoint 小幅变化
+-> 但 Q(current endpoint) - Q(reference endpoint) 没有稳定变正
+```
+
+因此 qstrong_lq05 不是失败动作 BC、delta clip、学习率归零或 action 尺度明显错位
+的问题，而是 policy improvement 信号仍未有效转化为更高 Q endpoint。
+
+### 本次代码变更
+
+为避免直接把正式训练配置改得过激，新增一个独立 probe 入口：
+
+```text
+examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe.yaml
+examples/lwd/scripts/probe_lwd_qam_cloud.sh
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_8a100.hope
+```
+
+`train_lwd_qam_cloud.sh` 新增 `RLINF_RUN_MODE=probe`，对应配置：
+
+```yaml
+runner:
+  logger:
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_lq01_gc01
+  max_steps: 300
+  save_interval: 100
+
+algorithm:
+  lambda_q: 0.1
+  qam_grad_clip: 0.1
+  qam_compare_interval: 5
+```
+
+probe 仍然继承 strict QAM 契约：
+
+```yaml
+anchor_weight: 0.0
+bc_weight: 0.0
+qam_clip_action_for_critic: false
+qam_critic_grad_mode: mean
+qam_delta_clip: 5.0
+```
+
+也就是说，这不是重新引入 BC/anchor，而是只做“更强价值引导”的短程 stress test。
+
+### 运行方式
+
+云端直接运行：
+
+```bash
+hope run examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_8a100.hope
+```
+
+输出目录：
+
+```text
+RLINF_QAM_LOG_ROOT/robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_lq01_gc01
+```
+
+### 判断标准
+
+probe 不先追求闭环成功率，先看训练日志是否满足：
+
+```text
+q_cur_minus_ref 明显 > 0
+cur_ref_endpoint_l2 从约 0.1 提升到 0.3~0.8
+qam_delta_clip_frac 不长期接近 1
+endpoint_saturation_frac 不明显爆炸
+```
+
+如果 probe 后 `q_cur_minus_ref` 明显变正，说明之前主要是 QAM 信号偏弱，可以再做
+300/500-step checkpoint 的 RoboTwin eval。如果 probe 后 `q_cur_minus_ref` 仍接近
+0，则说明单纯增强 QAM 不够，下一步应优先做 critic gradient finite-difference
+诊断，确认 frozen critic 在 actor endpoint 附近的局部 action gradient 是否可靠。

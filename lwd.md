@@ -899,6 +899,26 @@ actor:
 observation/noise 对比 current actor 和 frozen reference actor 的 endpoint Q 值。
 这些诊断不参与 loss，只用来判断 QAM 是否真的把当前策略推向更高 critic value。
 
+`global_step_1500` 的 qstrong 结果显示，actor 已经离开 reference，但
+`q_cur_minus_ref` 仍基本围绕 0，说明增强到 `lambda_q=0.5` 还没有稳定转化成更高
+critic Q。为此新增一个短程 probe 配置，专门做强信号 stress test：
+
+```yaml
+runner:
+  logger:
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_lq01_gc01
+  max_steps: 300
+  save_interval: 100
+
+algorithm:
+  lambda_q: 0.1
+  qam_grad_clip: 0.1
+  qam_compare_interval: 5
+```
+
+probe 不改变 QAM 公式，也不重新打开 BC/anchor；它只把价值引导强度进一步放大，
+用于判断“单纯增强 QAM 信号”是否能让 `q_cur_minus_ref` 明显变正。
+
 这版 QAM 明确采用“LWD 连续 sigma + OpenPI flow_ode”的实现对象，而不是直接照搬
 `/data/wam_codebase/qam` 里 stochastic sampler 的全部采样细节。原因是当前
 pi0.5 eval 和训练主路径用的是 OpenPI 的 deterministic flow ODE：
@@ -956,10 +976,13 @@ rlinf/workers/sft/fsdp_lwd_qam_worker.py
 
 examples/lwd/train_lwd_qam.py
 examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05.yaml
+examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe.yaml
 examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05_smoke.yaml
 examples/lwd/scripts/train_lwd_qam_cloud.sh
+examples/lwd/scripts/probe_lwd_qam_cloud.sh
 examples/lwd/scripts/smoke_lwd_qam_cloud.sh
 examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_train_8a100.hope
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_8a100.hope
 examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_smoke_8a100.hope
 ```
 
@@ -973,6 +996,12 @@ hope run examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_smoke_8a100.hope
 
 ```bash
 hope run examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_train_8a100.hope
+```
+
+云端强信号 probe：
+
+```bash
+hope run examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_8a100.hope
 ```
 
 默认路径通过环境变量覆盖：
