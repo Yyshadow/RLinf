@@ -1247,3 +1247,133 @@ lr: 1.0e-6
 ```
 
 而不是重新打开 mixed replay BC。
+
+## 2026-07-09：QAM step500 结果复盘和 qstrong_lq05 版本
+
+### 当前结果
+
+strict QAM 500-step checkpoint 已经不再像旧版 QAM 那样把策略训练坏，但闭环结果还
+没有超过 SFT baseline。在相同 RoboTwin eval 设置下：
+
+```text
+SFT baseline                 11 / 30 = 36.67%
+strict QAM global_step_500   11 / 30 = 36.67%
+旧版 QAM global_step_2000      0 / 30 = 0.00%
+```
+
+这个结果说明前一轮 strict 修正解决了“QAM 明显退化”的问题，但还没有证明 critic
+guidance 真的带来了策略提升。
+
+需要注意，当前 `3 env x 10 epoch` 的 eval 在
+`env.eval.use_fixed_reset_state_ids=true` 时，本质上是 3 个固定 reset seed 各重复
+10 次，不是 30 个完全不同的初始场景。后续要同时保留 hard seed repeat 评估和
+`env.eval.use_fixed_reset_state_ids=false` 的多 seed 评估。
+
+### TensorBoard 观察
+
+从最新 strict QAM 日志看，主要信号如下：
+
+```text
+bc_loss                 0
+qam_delta_clip_frac     0
+action_grad_clip_frac   约 0.35
+action_grad_norm        约 0.044
+adjoint_norm            约 0.0014
+lr                      最后约 4e-10
+```
+
+因此当前主要矛盾不是 BC 混入失败动作，也不是 `qam_delta_clip_frac` 长期饱和；
+真正的问题是 QAM 信号到 actor 端偏弱，并且 500-step cosine scheduler 在后期把学习率
+衰减到几乎为 0。旧日志里的 `q_mean/q_min` 仍是在 reference flow endpoint 上算的，
+不能直接回答 current actor 是否比 frozen reference actor 更好。
+
+### 本轮代码和配置修正
+
+1. 增加 current-vs-reference 成对 Q 诊断
+
+   `FSDPLWDQAMWorker.compute_qam_loss()` 现在会按 `algorithm.qam_compare_interval`
+   低频执行纯诊断分支：同一个 observation/noise 下，分别 rollout frozen reference
+   actor 和 current actor，并用同一个 frozen critic 计算 endpoint Q。
+
+   新增日志：
+
+   ```text
+   train/q_ref_mean
+   train/q_cur_mean
+   train/q_cur_minus_ref
+   train/q_ref_min
+   train/q_cur_min
+   train/q_cur_minus_ref_min
+   train/cur_ref_endpoint_l2
+   train/cur_endpoint_abs_p95
+   train/cur_endpoint_saturation_frac
+   ```
+
+   这些指标不参与 loss，只用于判断 QAM 是否真的把 current actor endpoint 推向更高
+   critic value。如果 `q_cur_minus_ref` 长期接近 0，说明 actor 基本没动；如果上升但
+   eval 不升，优先排查 critic 梯度和真实闭环收益是否一致；如果下降，则优先排查
+   QAM 符号、action 归一化或 critic 查询契约。
+
+2. 保持 QAM 公式不变，但增强价值引导强度
+
+   QAM loss 仍然是 OpenPI 坐标下的等价形式：
+
+   ```text
+   2(v_beta - v_theta) / sigma + sigma * adjoint
+   adjoint = -grad_a Q / lambda_q
+   ```
+
+   新配置把 `lambda_q` 从 2.0 改为 0.5，相当于把同一 critic action gradient 对 flow
+   的引导强度放大 4 倍。`qam_grad_clip` 暂时仍为 0.05，先只动一个主旋钮，避免
+   同时改变太多变量。
+
+3. 改成更适合短程验证的学习率调度
+
+   500-step cosine run 后期学习率衰减太快，最后几十步几乎没有更新。因此新正式
+   配置改为：
+
+   ```yaml
+   runner:
+     max_steps: 1500
+     save_interval: 500
+
+   actor:
+     optim:
+       lr: 2.0e-6
+       lr_scheduler: constant
+       lr_warmup_steps: 50
+   ```
+
+   这不是把学习率做大，而是避免短训练后半段学习率过早归零。
+
+4. 新实验目录隔离 resume
+
+   新实验名：
+
+   ```text
+   robotwin_beat_block_hammer_lwd_qam_openpi_pi05_qstrong_lq05
+   ```
+
+   smoke 实验名：
+
+   ```text
+   robotwin_beat_block_hammer_lwd_qam_openpi_pi05_qstrong_lq05_smoke
+   ```
+
+   这样云端自动 resume 不会接到 strict 500-step 的旧 checkpoint。smoke 配置把
+   `qam_compare_interval` 设为 1，用来覆盖新增诊断分支。
+
+### 下一步验证
+
+先跑 smoke，确认新增 current/reference 对比路径能通过；再跑正式 1500 step。每个
+500 step checkpoint 至少做两类 eval：
+
+```text
+1. hard seed repeat：保留当前 3 个固定 seed，各重复 10 次，看原失败 seed 是否改善；
+2. unique seed eval：设置 env.eval.use_fixed_reset_state_ids=false，看泛化成功率。
+```
+
+如果 `q_cur_minus_ref` 上升且 `cur_ref_endpoint_l2` 有合理增大，但闭环成功率不涨，
+下一步优先做 critic 梯度可信度诊断，而不是继续盲目放大 QAM。若
+`q_cur_minus_ref` 仍接近 0，则优先考虑继续增强引导强度，例如适度提高
+`qam_grad_clip` 或继续降低 `lambda_q`，但每次只改一个主变量。

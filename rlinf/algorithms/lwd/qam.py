@@ -44,6 +44,15 @@ class QAMLossOutput:
     replay_action_min: Tensor
     replay_action_max: Tensor
     replay_action_abs_p95: Tensor
+    q_ref_mean: Tensor | None = None
+    q_cur_mean: Tensor | None = None
+    q_cur_minus_ref: Tensor | None = None
+    q_ref_min: Tensor | None = None
+    q_cur_min: Tensor | None = None
+    q_cur_minus_ref_min: Tensor | None = None
+    cur_ref_endpoint_l2: Tensor | None = None
+    cur_endpoint_abs_p95: Tensor | None = None
+    cur_endpoint_saturation_frac: Tensor | None = None
 
 
 def clip_by_global_norm(

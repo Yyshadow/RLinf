@@ -21,12 +21,12 @@ runner:
   logger:
     log_path: ${oc.env:RLINF_QAM_LOG_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd_qam}
     project_name: rlinf
-    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_strict
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_qstrong_lq05
     logger_backends: ["tensorboard"]
   max_epochs: -1
-  max_steps: 500
+  max_steps: 1500
   val_check_interval: -1
-  save_interval: 100
+  save_interval: 500
   resume_dir: null
 
 data:
@@ -54,10 +54,11 @@ data:
 
 algorithm:
   reference_model_path: ${oc.env:RLINF_QAM_REFERENCE_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000}
-  lambda_q: 2.0
+  lambda_q: 0.5
   qam_num_denoise_steps: 5
   qam_critic_grad_mode: mean
   qam_clip_action_for_critic: false
+  qam_compare_interval: 20
   qam_loss_weight: 1.0
   qam_grad_clip: 0.05
   qam_delta_clip: 5.0
@@ -110,11 +111,9 @@ actor:
     adam_eps: 1.0e-8
     weight_decay: 1.0e-10
     clip_grad: 1.0
-    lr_scheduler: cosine
+    lr_scheduler: constant
     lr_warmup_steps: 50
     total_training_steps: ${runner.max_steps}
-    num_cycles: 0.5
-    min_lr: 2.0e-7
 
   fsdp_config:
     strategy: fsdp

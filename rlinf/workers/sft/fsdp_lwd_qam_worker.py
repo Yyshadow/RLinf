@@ -269,28 +269,29 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
         clip_action_for_critic = bool(
             self.cfg.algorithm.get("qam_clip_action_for_critic", False)
         )
+        compare_interval = int(self.cfg.algorithm.get("qam_compare_interval", 0))
 
+        initial_noise = torch.randn(
+            internal_action_shape,
+            device=self.device,
+            dtype=replay_actions.dtype,
+        )
         transitions = self._rollout_reference_flow(
             policy_inputs=policy_inputs,
-            action_shape=internal_action_shape,
+            initial_x=initial_noise,
             num_steps=num_steps,
             dtype=replay_actions.dtype,
         )
         endpoint = transitions[-1]["x_next"].detach().requires_grad_(True)
-        critic_endpoint = self._slice_env_action(endpoint, env_action_dim)
+        q_values, critic_endpoint, critic_action = self._critic_q_values(
+            critic_observation=critic_observation,
+            endpoint=endpoint,
+            env_action_dim=env_action_dim,
+            clip_action_for_critic=clip_action_for_critic,
+        )
         endpoint_saturation_frac = (
             ((critic_endpoint < -1.0) | (critic_endpoint > 1.0)).float().mean()
         )
-        critic_action = (
-            critic_endpoint.clamp(-1.0, 1.0)
-            if clip_action_for_critic
-            else critic_endpoint
-        )
-        q_out = self.critic_model(
-            observation=critic_observation,
-            action_chunk=critic_action,
-        )
-        q_values = q_out.q_values.float()
         q_min = q_values.min(dim=-1).values
         q_mean = q_values.mean(dim=-1)
         if critic_grad_mode == "mean":
@@ -355,8 +356,21 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             + anchor_weight * anchor_loss
             + bc_weight * bc_loss
         )
+        compare_stats = None
+        if compare_interval > 0 and self.global_step % compare_interval == 0:
+            compare_stats = self._compare_current_reference_q(
+                policy_inputs=policy_inputs,
+                critic_observation=critic_observation,
+                initial_noise=initial_noise,
+                reference_q_values=q_values.detach(),
+                reference_endpoint=critic_endpoint.detach(),
+                env_action_dim=env_action_dim,
+                num_steps=num_steps,
+                dtype=replay_actions.dtype,
+                clip_action_for_critic=clip_action_for_critic,
+            )
 
-        return QAMLossOutput(
+        output = QAMLossOutput(
             loss=loss,
             qam_loss=qam_loss.detach(),
             anchor_loss=anchor_loss.detach(),
@@ -381,6 +395,10 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             replay_action_max=replay_actions.detach().amax(),
             replay_action_abs_p95=self._abs_p95(replay_actions.detach()),
         )
+        if compare_stats is not None:
+            for key, value in compare_stats.items():
+                setattr(output, key, value)
+        return output
 
     def _setup_reference_and_critic(self) -> None:
         reference_cfg = OmegaConf.create(
@@ -398,11 +416,11 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
     def _rollout_reference_flow(
         self,
         policy_inputs: dict[str, Any],
-        action_shape: torch.Size,
+        initial_x: torch.Tensor,
         num_steps: int,
         dtype: torch.dtype,
     ) -> list[dict[str, torch.Tensor]]:
-        x_t = torch.randn(action_shape, device=self.device, dtype=dtype)
+        x_t = initial_x.detach()
         transitions = []
         for step in range(num_steps):
             x_t = x_t.detach().requires_grad_(True)
@@ -424,6 +442,95 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             )
             x_t = x_next.detach()
         return transitions
+
+    @torch.no_grad()
+    def _rollout_model_endpoint(
+        self,
+        model: torch.nn.Module,
+        policy_inputs: dict[str, Any],
+        initial_x: torch.Tensor,
+        num_steps: int,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        x_t = initial_x.detach()
+        for step in range(num_steps):
+            timestep = self._step_timestep(x_t.shape[0], step, num_steps, dtype)
+            v_t = self._policy_velocity(model, policy_inputs, x_t, timestep)
+            x_t = flow_ode_step(x_t, v_t, step, num_steps)
+        return x_t
+
+    def _critic_q_values(
+        self,
+        critic_observation: dict[str, Any],
+        endpoint: torch.Tensor,
+        env_action_dim: int,
+        clip_action_for_critic: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        critic_endpoint = self._slice_env_action(endpoint, env_action_dim)
+        critic_action = (
+            critic_endpoint.clamp(-1.0, 1.0)
+            if clip_action_for_critic
+            else critic_endpoint
+        )
+        q_out = self.critic_model(
+            observation=critic_observation,
+            action_chunk=critic_action,
+        )
+        return q_out.q_values.float(), critic_endpoint, critic_action
+
+    @torch.no_grad()
+    def _compare_current_reference_q(
+        self,
+        policy_inputs: dict[str, Any],
+        critic_observation: dict[str, Any],
+        initial_noise: torch.Tensor,
+        reference_q_values: torch.Tensor,
+        reference_endpoint: torch.Tensor,
+        env_action_dim: int,
+        num_steps: int,
+        dtype: torch.dtype,
+        clip_action_for_critic: bool,
+    ) -> dict[str, torch.Tensor]:
+        current_endpoint = self._rollout_model_endpoint(
+            model=self.model,
+            policy_inputs=policy_inputs,
+            initial_x=initial_noise,
+            num_steps=num_steps,
+            dtype=dtype,
+        )
+        current_q_values, current_endpoint, _ = self._critic_q_values(
+            critic_observation=critic_observation,
+            endpoint=current_endpoint,
+            env_action_dim=env_action_dim,
+            clip_action_for_critic=clip_action_for_critic,
+        )
+        q_ref = reference_q_values.float()
+        q_cur = current_q_values.float()
+        q_ref_mean = q_ref.mean(dim=-1)
+        q_cur_mean = q_cur.mean(dim=-1)
+        q_ref_min = q_ref.min(dim=-1).values
+        q_cur_min = q_cur.min(dim=-1).values
+        endpoint_delta = current_endpoint - reference_endpoint
+        return {
+            "q_ref_mean": q_ref_mean.mean().detach(),
+            "q_cur_mean": q_cur_mean.mean().detach(),
+            "q_cur_minus_ref": (q_cur_mean - q_ref_mean).mean().detach(),
+            "q_ref_min": q_ref_min.mean().detach(),
+            "q_cur_min": q_cur_min.mean().detach(),
+            "q_cur_minus_ref_min": (q_cur_min - q_ref_min).mean().detach(),
+            "cur_ref_endpoint_l2": endpoint_delta.float()
+            .flatten(1)
+            .norm(dim=-1)
+            .mean()
+            .detach(),
+            "cur_endpoint_abs_p95": self._abs_p95(current_endpoint.detach()),
+            "cur_endpoint_saturation_frac": (
+                ((current_endpoint < -1.0) | (current_endpoint > 1.0))
+                .float()
+                .mean()
+                .detach()
+            ),
+        }
 
     def _solve_reference_adjoint(
         self,
@@ -559,7 +666,7 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
 
     @staticmethod
     def _loss_metrics(loss_out: QAMLossOutput) -> dict[str, float]:
-        return {
+        metrics = {
             "loss": loss_out.loss.detach().item(),
             "qam_loss": loss_out.qam_loss.item(),
             "anchor_loss": loss_out.anchor_loss.item(),
@@ -584,6 +691,21 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             "replay_action_max": loss_out.replay_action_max.item(),
             "replay_action_abs_p95": loss_out.replay_action_abs_p95.item(),
         }
+        optional_metrics = {
+            "q_ref_mean": loss_out.q_ref_mean,
+            "q_cur_mean": loss_out.q_cur_mean,
+            "q_cur_minus_ref": loss_out.q_cur_minus_ref,
+            "q_ref_min": loss_out.q_ref_min,
+            "q_cur_min": loss_out.q_cur_min,
+            "q_cur_minus_ref_min": loss_out.q_cur_minus_ref_min,
+            "cur_ref_endpoint_l2": loss_out.cur_ref_endpoint_l2,
+            "cur_endpoint_abs_p95": loss_out.cur_endpoint_abs_p95,
+            "cur_endpoint_saturation_frac": loss_out.cur_endpoint_saturation_frac,
+        }
+        for key, value in optional_metrics.items():
+            if value is not None:
+                metrics[key] = value.item()
+        return metrics
 
     @staticmethod
     def _average_metrics(metrics: list[dict[str, float]]) -> dict[str, float]:

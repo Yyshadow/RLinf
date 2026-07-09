@@ -6,7 +6,7 @@ defaults:
 
 runner:
   logger:
-    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_strict_smoke
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_qstrong_lq05_smoke
   max_steps: 10
   save_interval: 10
 
@@ -21,6 +21,7 @@ data:
 
 algorithm:
   qam_num_denoise_steps: 2
+  qam_compare_interval: 1
 
 actor:
   micro_batch_size: 1
