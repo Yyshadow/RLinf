@@ -35,16 +35,16 @@ export PYTHONPATH="${REPO_PATH}:${PYTHONPATH:-}"
 case "${MODE}" in
     smoke)
         CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_smoke"
-        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_smoke"
+        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_strict_smoke"
         MAX_STEPS=10
         SAVE_INTERVAL=10
         AUTO_RESUME=0
         ;;
     train)
         CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05"
-        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05"
-        MAX_STEPS=2000
-        SAVE_INTERVAL=500
+        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_strict"
+        MAX_STEPS=500
+        SAVE_INTERVAL=100
         AUTO_RESUME=1
         ;;
     *)

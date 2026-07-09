@@ -831,12 +831,43 @@ Q_phi: 固定 LWD critic，来自 LWD critic checkpoint
 
 ```text
 1. 从 LWD replay 采样状态 s；
-2. 采样 Gaussian noise，shape 为 [B, 50, 14]；
+2. 在 OpenPI 内部 action space 采样 Gaussian noise，shape 为 [B, 50, 32]；
 3. 用固定 reference actor f_beta 做 flow-ODE rollout，得到 action chunk endpoint；
-4. 用 LWD critic 计算 Q_phi(s, endpoint)，并对 endpoint 求 ∇a Q；
+4. 切出 endpoint 的前 14 维给 LWD critic，计算 Q_phi(s, endpoint)，并对 endpoint 求 ∇a Q；
 5. 把 terminal action gradient 作为 adjoint 初值，沿 reference flow 反向传播；
 6. 用 QAM local regression loss 更新当前 actor f_theta 的 velocity field。
 ```
+
+默认训练目标已经改成严格 QAM policy extraction：
+
+```text
+L = L_QAM
+L_QAM = || 2(f_theta - f_beta)/sigma + sigma * g ||^2
+```
+
+上式里的 `f` 是 noise-to-action 方向的 flow field。RLinf/OpenPI 内部训练的是
+reverse-time velocity：`v_openpi = noise - action`，并用 `x_next = x - dt * v`
+从 `t=1` 的 noise 积分到 `t=0` 的 action。因此代码里的等价形式是
+`2(v_beta - v_theta)/sigma + sigma * adjoint`。`v_beta` 是 frozen SFT reference
+actor 的 velocity，`v_theta` 是从同一 SFT checkpoint 初始化并继续优化的 actor
+velocity。
+
+默认不再对 replay action 做 BC，也不再启用额外 anchor：
+
+```yaml
+algorithm:
+  qam_loss_weight: 1.0
+  anchor_weight: 0.0
+  bc_weight: 0.0
+```
+
+原因是 QAM 阶段应该利用 replay 的状态分布和 critic action gradient，而不是把
+failed/nearmiss 的 replay action 当专家动作模仿。`anchor_weight` 和 `bc_weight`
+仍保留为 ablation 开关；如果后续要重新打开 BC，应只接成功 demonstration 或
+显式修正后的成功动作数据，不应直接对 mixed replay action 做 BC。
+
+worker 里的默认值也已经同步为 strict QAM，避免复制配置时漏写权重又回到旧版
+mixed replay BC。
 
 这版 QAM 明确采用“LWD 连续 sigma + OpenPI flow_ode”的实现对象，而不是直接照搬
 `/data/wam_codebase/qam` 里 stochastic sampler 的全部采样细节。原因是当前
@@ -865,6 +896,21 @@ algorithm:
 QAM 源码里 clamp 是可选的工程开关，LWD 论文公式本身没有要求 action 必须在查询
 critic 前 clamp；如果打开 clamp，超出 `[-1, 1]` 的 endpoint 在边界外会出现零梯度，
 所以只建议作为诊断或保守 ablation 使用。
+
+当前默认训练数据先采 `success + nearmiss` 状态：
+
+```yaml
+data:
+  train_data_paths:
+    - dataset_path: beat_block_hammer_success_train
+      weight: 1.0
+    - dataset_path: beat_block_hammer_nearmiss_train
+      weight: 1.0
+```
+
+pure failed 状态先不放进 strict QAM 主实验，避免在 critic 仍未充分校准时让
+policy extraction 过早依赖远离成功分布的状态。后续建议作为 ablation 以
+`success:nearmiss:failed = 1:1:0.25` 再加回。
 
 对应代码：
 
@@ -940,20 +986,27 @@ train/q_mean
 train/q_min
 train/q_head_gap
 train/action_grad_norm
+train/action_grad_clip_frac
 train/adjoint_norm
 train/qam_delta_norm
 train/qam_delta_clip_frac
 train/endpoint_min
 train/endpoint_max
+train/endpoint_abs_p95
 train/endpoint_saturation_frac
 train/critic_action_min
 train/critic_action_max
+train/critic_action_abs_p95
+train/replay_action_min
+train/replay_action_max
+train/replay_action_abs_p95
 ```
 
 其中 `q_head_gap` 用来观察 critic 多个 Q heads 是否分歧过大；
 `endpoint_saturation_frac` 用来观察 reference actor 生成的 action endpoint 有多少
 比例超出 `[-1, 1]`；`critic_action_min/max` 用来确认 critic 实际看到的是 unclamped
-action 还是 clamp 后的 action。
+action 还是 clamp 后的 action；`*_abs_p95` 用来比较 replay action、reference
+endpoint 和 critic query action 的归一化分布是否在同一量级。
 
 ### 当前 FSDP 边界
 

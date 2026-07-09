@@ -21,20 +21,18 @@ runner:
   logger:
     log_path: ${oc.env:RLINF_QAM_LOG_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd_qam}
     project_name: rlinf
-    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_strict
     logger_backends: ["tensorboard"]
   max_epochs: -1
-  max_steps: 2000
+  max_steps: 500
   val_check_interval: -1
-  save_interval: 500
+  save_interval: 100
   resume_dir: null
 
 data:
   data_root: ${oc.env:RLINF_LWD_DATA_ROOT,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_lwd_split}
   train_data_paths:
     - dataset_path: beat_block_hammer_success_train
-      weight: 1.0
-    - dataset_path: beat_block_hammer_failed_train
       weight: 1.0
     - dataset_path: beat_block_hammer_nearmiss_train
       weight: 1.0
@@ -57,14 +55,14 @@ data:
 algorithm:
   reference_model_path: ${oc.env:RLINF_QAM_REFERENCE_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000}
   lambda_q: 2.0
-  qam_num_denoise_steps: 4
+  qam_num_denoise_steps: 5
   qam_critic_grad_mode: mean
   qam_clip_action_for_critic: false
   qam_loss_weight: 1.0
   qam_grad_clip: 0.05
-  qam_delta_clip: 0.2
-  anchor_weight: 0.05
-  bc_weight: 0.1
+  qam_delta_clip: 5.0
+  anchor_weight: 0.0
+  bc_weight: 0.0
   min_sigma: 1.0e-3
 
 critic:
@@ -105,18 +103,18 @@ actor:
       detach_critic_input: true
 
   optim:
-    lr: 1.0e-5
-    value_lr: 1.0e-5
+    lr: 2.0e-6
+    value_lr: 2.0e-6
     adam_beta1: 0.9
     adam_beta2: 0.95
     adam_eps: 1.0e-8
     weight_decay: 1.0e-10
     clip_grad: 1.0
     lr_scheduler: cosine
-    lr_warmup_steps: 100
+    lr_warmup_steps: 50
     total_training_steps: ${runner.max_steps}
     num_cycles: 0.5
-    min_lr: 1.0e-6
+    min_lr: 2.0e-7
 
   fsdp_config:
     strategy: fsdp

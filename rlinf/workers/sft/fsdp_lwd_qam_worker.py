@@ -251,17 +251,17 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
         internal_action_shape = torch.Size(
             (*replay_actions.shape[:-1], model_action_dim)
         )
-        num_steps = int(self.cfg.algorithm.get("qam_num_denoise_steps", 10))
+        num_steps = int(self.cfg.algorithm.get("qam_num_denoise_steps", 5))
         lambda_q = float(self.cfg.algorithm.get("lambda_q", 2.0))
         if num_steps < 2:
             raise ValueError("algorithm.qam_num_denoise_steps must be at least 2.")
         if lambda_q <= 0:
             raise ValueError("algorithm.lambda_q must be positive.")
         qam_loss_weight = float(self.cfg.algorithm.get("qam_loss_weight", 1.0))
-        anchor_weight = float(self.cfg.algorithm.get("anchor_weight", 0.05))
-        bc_weight = float(self.cfg.algorithm.get("bc_weight", 0.1))
+        anchor_weight = float(self.cfg.algorithm.get("anchor_weight", 0.0))
+        bc_weight = float(self.cfg.algorithm.get("bc_weight", 0.0))
         qam_grad_clip = self.cfg.algorithm.get("qam_grad_clip", 0.05)
-        qam_delta_clip = self.cfg.algorithm.get("qam_delta_clip", 0.2)
+        qam_delta_clip = self.cfg.algorithm.get("qam_delta_clip", 5.0)
         min_sigma = float(self.cfg.algorithm.get("min_sigma", 1e-3))
         critic_grad_mode = str(
             self.cfg.algorithm.get("qam_critic_grad_mode", "mean")
@@ -303,7 +303,7 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             )
         q_scalar = q_for_grad.sum()
         action_grad = torch.autograd.grad(q_scalar, endpoint)[0]
-        action_grad, action_grad_norm, _ = clip_by_global_norm(
+        action_grad, action_grad_norm, action_grad_clip_frac = clip_by_global_norm(
             action_grad,
             qam_grad_clip,
         )
@@ -342,7 +342,14 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
 
         qam_loss = torch.stack(qam_losses).mean()
         anchor_loss = torch.stack(anchor_losses).mean()
-        bc_loss = self._bc_flow_loss(policy_inputs, replay_actions, model_action_dim)
+        if bc_weight > 0:
+            bc_loss = self._bc_flow_loss(
+                policy_inputs,
+                replay_actions,
+                model_action_dim,
+            )
+        else:
+            bc_loss = qam_loss.new_zeros(())
         loss = (
             qam_loss_weight * qam_loss
             + anchor_weight * anchor_loss
@@ -359,14 +366,20 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             q_std=q_for_grad.detach().std(unbiased=False),
             q_head_gap=q_values.detach().std(dim=-1, unbiased=False).mean(),
             action_grad_norm=action_grad_norm.detach().mean(),
+            action_grad_clip_frac=action_grad_clip_frac.detach(),
             adjoint_norm=torch.stack(adjoint_norms).mean().detach(),
             qam_delta_norm=torch.stack(delta_norms).mean().detach(),
             qam_delta_clip_frac=torch.stack(delta_clip_fracs).mean().detach(),
             endpoint_min=critic_endpoint.detach().amin(),
             endpoint_max=critic_endpoint.detach().amax(),
+            endpoint_abs_p95=self._abs_p95(critic_endpoint.detach()),
             endpoint_saturation_frac=endpoint_saturation_frac.detach(),
             critic_action_min=critic_action.detach().amin(),
             critic_action_max=critic_action.detach().amax(),
+            critic_action_abs_p95=self._abs_p95(critic_action.detach()),
+            replay_action_min=replay_actions.detach().amin(),
+            replay_action_max=replay_actions.detach().amax(),
+            replay_action_abs_p95=self._abs_p95(replay_actions.detach()),
         )
 
     def _setup_reference_and_critic(self) -> None:
@@ -556,14 +569,20 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             "q_std": loss_out.q_std.item(),
             "q_head_gap": loss_out.q_head_gap.item(),
             "action_grad_norm": loss_out.action_grad_norm.item(),
+            "action_grad_clip_frac": loss_out.action_grad_clip_frac.item(),
             "adjoint_norm": loss_out.adjoint_norm.item(),
             "qam_delta_norm": loss_out.qam_delta_norm.item(),
             "qam_delta_clip_frac": loss_out.qam_delta_clip_frac.item(),
             "endpoint_min": loss_out.endpoint_min.item(),
             "endpoint_max": loss_out.endpoint_max.item(),
+            "endpoint_abs_p95": loss_out.endpoint_abs_p95.item(),
             "endpoint_saturation_frac": loss_out.endpoint_saturation_frac.item(),
             "critic_action_min": loss_out.critic_action_min.item(),
             "critic_action_max": loss_out.critic_action_max.item(),
+            "critic_action_abs_p95": loss_out.critic_action_abs_p95.item(),
+            "replay_action_min": loss_out.replay_action_min.item(),
+            "replay_action_max": loss_out.replay_action_max.item(),
+            "replay_action_abs_p95": loss_out.replay_action_abs_p95.item(),
         }
 
     @staticmethod
@@ -573,6 +592,10 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             for key, value in item.items():
                 merged.setdefault(key, []).append(value)
         return {key: sum(values) / len(values) for key, values in merged.items()}
+
+    @staticmethod
+    def _abs_p95(value: torch.Tensor) -> torch.Tensor:
+        return torch.quantile(value.float().abs().flatten(), 0.95)
 
 
 __all__ = ["FSDPLWDQAMWorker"]

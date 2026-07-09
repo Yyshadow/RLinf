@@ -530,7 +530,7 @@ RoboTwin eval / 视频诊断
 advantage-weighted BC 又不适合 OpenPI 这种 flow action generator。因此这次接入
 第一版 QAM。
 
-### 当前实现
+### 当时实现
 
 新增文件：
 
@@ -563,7 +563,7 @@ critic.model.model_path
 这样做是为了避免把 base package、SFT checkpoint、critic checkpoint 混成一个
 `model_path`，导致 OpenPI loader、critic loader 和 resume 语义互相污染。
 
-### QAM 训练逻辑
+### 当时 QAM 训练逻辑
 
 每个 batch：
 
@@ -576,6 +576,11 @@ critic.model.model_path
 6. 当前 actor 用 ForwardType.NFT 在同一批中间 x_t/t 上预测 velocity；
 7. 优化 QAM local regression loss + 小权重 anchor loss + 小权重 BC flow loss。
 ```
+
+这属于 2026-07-07 的第一版接入方案。后续实验证明 mixed replay 上的 BC 会把
+failed/nearmiss action 也当作专家动作模仿，因此 2026-07-09 起默认训练目标已改为
+strict QAM：`anchor_weight=0.0`、`bc_weight=0.0`，只保留 QAM local regression
+作为主优化信号。
 
 第一版固定 critic，不和 actor 一起更新。这样 smoke 和早期实验更容易定位问题：
 如果 QAM 后闭环变差，优先排查 policy extraction 和 critic gradient，而不是
@@ -771,8 +776,10 @@ train_expert_only: false
 ```
 
 也就是先验证 LWD offline 风格的全量 actor QAM。训练输出保存到
-`RLINF_QAM_LOG_ROOT/robotwin_beat_block_hammer_lwd_qam_openpi_pi05/checkpoints`，
-默认每 500 step 保存一次，用于后续和 SFT baseline 做闭环 eval 对比。
+旧版目录 `RLINF_QAM_LOG_ROOT/robotwin_beat_block_hammer_lwd_qam_openpi_pi05/checkpoints`。
+2026-07-09 strict 版本已改用
+`RLINF_QAM_LOG_ROOT/robotwin_beat_block_hammer_lwd_qam_openpi_pi05_strict/checkpoints`，
+默认每 100 step 保存一次，用于避免自动 resume 到旧的 mixed-BC checkpoint。
 
 ## 2026-07-08：QAM smoke actor.model 缺少 is_lora
 
@@ -894,23 +901,25 @@ cfg.get("is_lora", False)
    ```
 
    当前 FSDP 配置是 `sharding_strategy: no_shard`，所以每张 GPU 都会放完整模型。
-   8x80G 大概率可以做 smoke，但正式 `qam_num_denoise_steps=10` 会比普通 SFT 更吃
+   8x80G 大概率可以做 smoke，但正式 QAM 仍会比普通 SFT 更吃
    显存。如果下一次日志变成 CUDA OOM，优先把正式训练的
-   `algorithm.qam_num_denoise_steps` 从 10 降到 4 或 6 做验证，而不是先改算法方向。
+   `algorithm.qam_num_denoise_steps` 从当前 5 降到 3 或 4 做验证，而不是先改算法方向。
 
 2. 训练有效性风险
 
-   当前 QAM 默认使用：
+   2026-07-09 之后当前 QAM 默认使用：
 
    ```yaml
    qam_critic_grad_mode: mean
    qam_clip_action_for_critic: false
-   anchor_weight: 0.05
-   bc_weight: 0.1
+   qam_loss_weight: 1.0
+   anchor_weight: 0.0
+   bc_weight: 0.0
    ```
 
-   这是为了先验证 frozen critic 是否能给 actor 提供有用方向。是否真正提升策略，
-   仍然要看后续 RoboTwin eval success rate 和视频，而不能只看 `q_mean` 是否上升。
+   这是为了先验证 frozen critic 是否能通过纯 QAM residual 给 actor 提供有用方向，
+   避免 mixed replay action BC 干扰。是否真正提升策略，仍然要看后续 RoboTwin eval
+   success rate 和视频，而不能只看 `q_mean` 是否上升。
 
 ## 2026-07-08：QAM smoke critic checkpoint loader 路径类型问题
 
@@ -1091,3 +1100,150 @@ env critic action space: 14 维，用于 LWD critic 评分
 
 这样 QAM 对接的是 OpenPI 真正的 flow 内部空间，同时 critic 仍然只看自己训练过的
 14 维动作空间。
+
+## 2026-07-09：QAM strict 版本优化和训练坏掉的根因修正
+
+### 背景
+
+第一轮正式 QAM checkpoint 闭环表现明显差于 SFT baseline。结合视频和
+TensorBoard 指标看，主要不是“训练步数不够”，而是优化目标本身被旧版工程项带偏：
+
+```text
+QAM loss contribution   约 13%
+anchor contribution     约 5%
+BC contribution         约 82%
+qam_delta_clip_frac     长期接近 1.0
+```
+
+其中最大的问题是旧版 QAM 数据混用了 success/failed/nearmiss，并且
+`bc_weight=0.1`。这会把 failed 和 nearmiss 的 replay action 也当成专家动作去模仿，
+而 QAM 本应使用这些数据里的状态分布和 critic action gradient，不应默认模仿失败动作。
+
+### 第一性原理修正
+
+当前实现改为 strict QAM policy extraction：
+
+```yaml
+algorithm:
+  qam_loss_weight: 1.0
+  anchor_weight: 0.0
+  bc_weight: 0.0
+  qam_delta_clip: 5.0
+  qam_clip_action_for_critic: false
+```
+
+训练目标退回到 QAM 源码和论文公式对应的局部 vector-field matching：
+
+```text
+L = L_QAM
+L_QAM = || 2(f_theta - f_beta) / sigma + sigma * g ||^2
+```
+
+需要注意的是，上式里的 `f` 是 noise-to-action 方向的 flow field；OpenPI/pi0.5
+内部训练的是反方向 velocity：
+
+```text
+x_t = t * noise + (1 - t) * action
+v_openpi = noise - action
+x_next = x - dt * v_openpi
+```
+
+所以在代码的 OpenPI velocity 坐标中，等价 residual 是：
+
+```text
+2(v_beta - v_theta) / sigma + sigma * adjoint
+```
+
+这里 `v_beta` 是 frozen SFT reference actor，`v_theta` 是当前训练 actor，
+`adjoint = -grad_a Q / lambda_q`，和 QAM 源码里 `adj = -grad_fn(...) * inv_temp`
+保持同一方向。因此这不是偏离公式，而是把 QAM 公式换到 OpenPI 的反向 velocity
+坐标后得到的等价形式。
+
+### 数据策略
+
+strict 主实验默认只使用：
+
+```yaml
+data:
+  train_data_paths:
+    - dataset_path: beat_block_hammer_success_train
+      weight: 1.0
+    - dataset_path: beat_block_hammer_nearmiss_train
+      weight: 1.0
+```
+
+pure failed 状态先不放进主实验。原因是当前 critic 虽然能在离线诊断中区分
+success/failed/nearmiss，但 QAM 是直接用 critic action gradient 改 actor；在 critic
+还没有通过更多闭环验证前，先用 success + nearmiss 状态更稳。failed 状态后续可以
+作为 ablation 以较小权重加入，例如 `success:nearmiss:failed = 1:1:0.25`。
+
+### 代码变更
+
+1. `rlinf/algorithms/lwd/qam.py`
+
+   明确注释 QAM 原始公式和 OpenPI reverse-time velocity 的等价关系，避免后续把
+   `v_beta - v_theta` 误改成符号相反的形式。
+
+2. `rlinf/workers/sft/fsdp_lwd_qam_worker.py`
+
+   默认权重改为 strict QAM：
+
+   ```text
+   anchor_weight default: 0.0
+   bc_weight default: 0.0
+   qam_delta_clip default: 5.0
+   ```
+
+   同时当 `bc_weight <= 0` 时不再计算 `_bc_flow_loss()`，避免无意义的额外 forward。
+   训练日志新增 action 分布诊断：
+
+   ```text
+   train/action_grad_clip_frac
+   train/endpoint_abs_p95
+   train/critic_action_abs_p95
+   train/replay_action_min
+   train/replay_action_max
+   train/replay_action_abs_p95
+   ```
+
+3. `examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05.yaml`
+
+   默认实验名改为：
+
+   ```text
+   robotwin_beat_block_hammer_lwd_qam_openpi_pi05_strict
+   ```
+
+   这样云端自动 resume 不会误接到旧的坏 checkpoint。
+
+4. `examples/lwd/scripts/train_lwd_qam_cloud.sh`
+
+   train 默认跑 500 step、每 100 step 保存一次，并自动从 strict 实验目录里最新完整
+   checkpoint resume。如果要完全重开，设置：
+
+   ```bash
+   export RLINF_FORCE_RESTART=1
+   ```
+
+### 下一步验证
+
+先跑 smoke，确认导入、三模型加载、QAM forward/backward/save 全部通过；再跑 strict
+train 500 step。完成后不要只看 `q_mean`，至少需要：
+
+```text
+1. 对比 SFT baseline 和 strict QAM checkpoint 的 RoboTwin success rate；
+2. 固定 action_exec_horizon=30 做 30 次 eval；
+3. 保存成功/失败视频，重点看 endpoint 是否仍然大幅偏移；
+4. 检查 qam_delta_clip_frac 是否显著低于旧版长期 1.0 的状态；
+5. 检查 replay_action_abs_p95 和 critic_action_abs_p95 是否处在同一量级。
+```
+
+如果 strict QAM 仍然退化，下一步优先调小 Q 引导强度：
+
+```text
+lambda_q: 4.0 或 8.0
+qam_grad_clip: 0.02
+lr: 1.0e-6
+```
+
+而不是重新打开 mixed replay BC。

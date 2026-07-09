@@ -30,14 +30,20 @@ class QAMLossOutput:
     q_std: Tensor
     q_head_gap: Tensor
     action_grad_norm: Tensor
+    action_grad_clip_frac: Tensor
     adjoint_norm: Tensor
     qam_delta_norm: Tensor
     qam_delta_clip_frac: Tensor
     endpoint_min: Tensor
     endpoint_max: Tensor
+    endpoint_abs_p95: Tensor
     endpoint_saturation_frac: Tensor
     critic_action_min: Tensor
     critic_action_max: Tensor
+    critic_action_abs_p95: Tensor
+    replay_action_min: Tensor
+    replay_action_max: Tensor
+    replay_action_abs_p95: Tensor
 
 
 def clip_by_global_norm(
@@ -118,13 +124,12 @@ def qam_vector_field_loss(
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Compute the local QAM vector-field regression loss.
 
-    The continuous QAM objective is written in the noise-to-data
-    coordinate ``w``.  OpenPI's flow-ODE implementation integrates the
-    opposite time variable, from ``t=1`` noise to ``t=0`` action, with
-    ``x_next = x - dt * v``.  Therefore a positive action-value gradient
-    should push the learned OpenPI velocity in the negative direction.
-    Using ``v_beta - v_theta`` below preserves the QAM improvement
-    direction in this OpenPI time convention.
+    The QAM paper and reference implementation write the residual as
+    ``2 * (f_theta - f_beta) / sigma + sigma * g`` for a noise-to-action
+    vector field.  OpenPI trains the reverse-time velocity
+    ``v = noise - action`` and integrates it with ``x_next = x - dt * v``.
+    In this coordinate system, ``f_theta - f_beta`` becomes
+    ``v_beta - v_theta``.
     """
 
     sigma = flow_sigmas(timesteps, min_sigma=min_sigma)
