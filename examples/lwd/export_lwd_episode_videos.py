@@ -141,7 +141,7 @@ def export_video(
     dataset = LWDChunkDataset(
         dataset_path=str(data_root / dataset_name),
         action_horizon=50,
-        norm_stats_path=str(data_root / "pi05_norm_stats.json"),
+        norm_stats_path=str(data_root / "norm_stats.json"),
         use_quantile_norm=True,
         adapt_to_pi=True,
     )

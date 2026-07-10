@@ -50,7 +50,7 @@ actor:
     add_value_head: false
     openpi:
       config_name: pi05_aloha_robotwin
-      norm_stats_path: ${oc.env:RLINF_PI05_NORM_STATS_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_lwd_split/pi05_norm_stats.json}
+      norm_stats_path: ${oc.env:RLINF_PI05_NORM_STATS_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/datasets/rl_data/robotwin_aloha_lwd_split/norm_stats.json}
       detach_critic_input: true
       num_images_in_input: 3
       noise_level: 0.5

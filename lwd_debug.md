@@ -131,8 +131,8 @@ runner.save_interval: 10
 
 推荐运行顺序：
 
-1. 先跑 `examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope`，确认 10 step 能完整 forward/backward/save。
-2. smoke 通过后，再跑 `examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope`。
+1. 先跑 `examples/sft/hope/robotwin_pi05_hammer50_allstats_smoke_8a100.hope`，确认 10 step 能完整 forward/backward/save。
+2. smoke 通过后，再跑 `examples/sft/hope/robotwin_pi05_hammer50_allstats_train_8a100.hope`。
 3. 如果 full finetune 显存稳定，正式训练使用下面的 10k overfit 配置；如果 OOM，再把 `micro_batch_size` 从 4 降到 2。
 
 ### 后续如果必须只训 expert
@@ -419,15 +419,15 @@ rollout:
 把云端训练逻辑从 hope 文件下沉到两个 repo 内脚本：
 
 ```text
-examples/sft/scripts/train_pi05_hammer50_cloud.sh
+examples/sft/scripts/train_pi05_hammer50_allstats_cloud.sh
 examples/lwd/scripts/train_lwd_critic_cloud.sh
 ```
 
 四个 hope 文件现在只负责申请资源、指定 docker、打开 failover，并调用脚本：
 
 ```text
-examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope
-examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope
+examples/sft/hope/robotwin_pi05_hammer50_allstats_smoke_8a100.hope
+examples/sft/hope/robotwin_pi05_hammer50_allstats_train_8a100.hope
 examples/lwd/hope/robotwin_lwd_critic_smoke_8a100.hope
 examples/lwd/hope/robotwin_lwd_critic_train_8a100.hope
 ```
@@ -715,10 +715,10 @@ qam_clip_action_for_critic: false
 
 ```text
 SFT actor:
-/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000
+/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_all_stats/pi05_hammer50_overfit50_10k_allstats_v1/checkpoints/global_step_11000
 
 LWD critic:
-/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor
+/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd_critic/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor
 ```
 
 之前 QAM cloud 脚本里的 actor 默认路径仍指向旧的
@@ -729,7 +729,7 @@ LWD critic:
 1. `examples/lwd/scripts/train_lwd_qam_cloud.sh`
 
    默认 `RLINF_QAM_ACTOR_MODEL_PATH` 改为新的
-   `checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000`。
+   `checkpoints/rlinf_pi05_sft_all_stats/pi05_hammer50_overfit50_10k_allstats_v1/checkpoints/global_step_11000`。
    `RLINF_QAM_REFERENCE_MODEL_PATH` 仍默认等于 actor path，也就是 QAM 从 SFT actor
    初始化，并用同一个 SFT actor 作为固定 reference flow。
 
@@ -746,7 +746,7 @@ LWD critic:
    actor/actor/model_state_dict/full_weights.pt
    reference/actor/model_state_dict/full_weights.pt
    critic/model_state_dict/full_weights.pt
-   LWD replay pi05_norm_stats.json
+   LWD replay norm_stats.json
    OpenPI norm_stats.json
    big_vision/paligemma_tokenizer.model
    ```

@@ -36,17 +36,17 @@ rlinf/models/embodiment/openpi/
 
 examples/lwd/
   train_lwd_critic.py
-  run_lwd_critic.sh
-  config/robotwin_lwd_critic.yaml
+  config/robotwin_lwd_critic_cloud_beat_block.yaml
+  config/robotwin_lwd_critic_cloud_beat_block_smoke.yaml
   config/model/lwd_critic.yaml
   config/training_backend/fsdp.yaml
                       # LWD 自包含的模型和 FSDP 配置片段
 
 examples/sft/
-  config/robotwin_sft_openpi_pi05_hammer50_cloud.yaml
-  hope/robotwin_pi05_hammer50_smoke_8a100.hope
-  hope/robotwin_pi05_hammer50_train_8a100.hope
-                      # pi0.5 hammer50 quick SFT 的云端配置和提交文件
+  config/robotwin_sft_openpi_pi05_hammer50_allstats_cloud.yaml
+  hope/robotwin_pi05_hammer50_allstats_smoke_8a100.hope
+  hope/robotwin_pi05_hammer50_allstats_train_8a100.hope
+                      # pi0.5 hammer50 allstats SFT 的云端配置和提交文件
 ```
 
 ## Robotwin pi0.5 / LWD 数据闭环
@@ -427,7 +427,7 @@ critic 训练依赖一份和 pi0.5 SFT 相同口径的统计量：
 
 ```yaml
 data:
-  norm_stats_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha/pi05_norm_stats.json
+  norm_stats_path: /data/wam_codebase/RLinf/datasets/robotwin_aloha_lwd_split/norm_stats.json
   use_quantile_norm: true
   adapt_to_pi: true
 ```
@@ -489,7 +489,7 @@ quantile_tau: 0.6
 配置文件：
 
 ```text
-examples/lwd/config/robotwin_lwd_critic.yaml
+examples/lwd/config/robotwin_lwd_critic_cloud_beat_block.yaml
 ```
 
 当前训练入口已经对齐 RLinf 的 SFT runner 路径：
@@ -528,14 +528,14 @@ data:
     - dataset_path: /path/to/failed_lerobot_dataset
   eval_data_paths:
     - dataset_path: /path/to/eval_lerobot_dataset
-  norm_stats_path: /path/to/pi05_norm_stats.json
+  norm_stats_path: /path/to/norm_stats.json
 ```
 
 启动示例：
 
 ```bash
 cd /data/wam_codebase/RLinf
-bash examples/lwd/run_lwd_critic.sh robotwin_lwd_critic
+bash examples/lwd/scripts/train_lwd_critic_cloud.sh
 ```
 
 ### 云端 beat_block 训练
@@ -550,7 +550,7 @@ datasets/robotwin_aloha_lwd_split/
   beat_block_hammer_failed_eval
   beat_block_hammer_nearmiss_train
   beat_block_hammer_nearmiss_eval
-  pi05_norm_stats.json
+  norm_stats.json
 ```
 
 对应配置文件：
@@ -760,31 +760,32 @@ hammer50 smoke/train hope 会在启动训练前检查这个文件是否存在，
 提交文件：
 
 ```text
-examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope
-examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope
-examples/sft/scripts/train_pi05_hammer50_cloud.sh
-examples/sft/scripts/smoke_pi05_hammer50_cloud.sh
+examples/sft/hope/robotwin_pi05_hammer50_allstats_smoke_8a100.hope
+examples/sft/hope/robotwin_pi05_hammer50_allstats_train_8a100.hope
+examples/sft/scripts/train_pi05_hammer50_allstats_cloud.sh
+examples/sft/scripts/smoke_pi05_hammer50_allstats_cloud.sh
 ```
 
 hope 文件只保留云端资源、docker、failover 等平台配置；conda 环境、离线缓存、
 OpenPI tokenizer 检查、训练命令和自动 resume 逻辑都在
-`train_pi05_hammer50_cloud.sh` 里。脚本按固定环境路径执行
+`train_pi05_hammer50_allstats_cloud.sh` 里。脚本按固定环境路径执行
 `source ${CLOUD_ROOT}/Miniforge/bin/activate ${CLOUD_ROOT}/Miniforge/envs/rlinf_lwd`，
 不再用环境名变量，避免云端继承变量把环境名污染成 `smoke`。
 smoke 和 train 也不再通过 `worker.script` 尾部参数区分：train hope 直接调用
-`train_pi05_hammer50_cloud.sh`，smoke hope 调用 `smoke_pi05_hammer50_cloud.sh`。
+`train_pi05_hammer50_allstats_cloud.sh`，smoke hope 调用
+`smoke_pi05_hammer50_allstats_cloud.sh`。
 
 建议先提交 smoke：
 
 ```bash
-hope run examples/sft/hope/robotwin_pi05_hammer50_smoke_8a100.hope
+hope run examples/sft/hope/robotwin_pi05_hammer50_allstats_smoke_8a100.hope
 ```
 
 确认 import、OpenPI dataloader、FSDP 初始化和 checkpoint 保存都通过后，再提交正式
 10k-step overfit SFT：
 
 ```bash
-hope run examples/sft/hope/robotwin_pi05_hammer50_train_8a100.hope
+hope run examples/sft/hope/robotwin_pi05_hammer50_allstats_train_8a100.hope
 ```
 
 checkpoint 会保存到：
@@ -1010,24 +1011,24 @@ hope run examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_8a100.hope
 export RLINF_QAM_ACTOR_MODEL_PATH=/path/to/current_actor_or_sft_checkpoint
 export RLINF_QAM_REFERENCE_MODEL_PATH=/path/to/reference_actor_or_sft_checkpoint
 export RLINF_QAM_CRITIC_MODEL_PATH=/path/to/lwd_critic_checkpoint/actor
-export RLINF_PI05_NORM_STATS_PATH=/path/to/pi05/norm_stats.json
+export RLINF_PI05_NORM_STATS_PATH=/path/to/norm_stats.json
 ```
 
 当前云端 QAM 入口默认使用：
 
 ```text
 RLINF_QAM_ACTOR_MODEL_PATH
-  /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000
+  /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_pi05_sft_all_stats/pi05_hammer50_overfit50_10k_allstats_v1/checkpoints/global_step_11000
 
 RLINF_QAM_REFERENCE_MODEL_PATH
   默认等于 RLINF_QAM_ACTOR_MODEL_PATH
 
 RLINF_QAM_CRITIC_MODEL_PATH
-  /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor
+  /mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd_critic/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor
 ```
 
 `train_lwd_qam_cloud.sh` 启动前会检查 actor/reference/critic 的
-`model_state_dict/full_weights.pt`、LWD replay 的 `pi05_norm_stats.json`、OpenPI
+`model_state_dict/full_weights.pt`、LWD replay 的 `norm_stats.json`、OpenPI
 `norm_stats.json` 和离线 tokenizer，路径不对会直接退出。
 
 第一版默认固定 critic，不在 QAM step 里同时更新 Q/V。这样可以先验证

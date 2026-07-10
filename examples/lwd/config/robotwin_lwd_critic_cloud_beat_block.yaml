@@ -48,7 +48,7 @@ data:
     - name: beat_block_nearmiss
       dataset_path: beat_block_hammer_nearmiss_eval
       max_samples: 2000
-  norm_stats_path: pi05_norm_stats.json
+  norm_stats_path: norm_stats.json
   use_quantile_norm: true
   adapt_to_pi: true
   action_horizon: 50

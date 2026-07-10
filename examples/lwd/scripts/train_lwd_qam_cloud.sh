@@ -11,11 +11,11 @@ source "${CLOUD_ROOT}/Miniforge/bin/activate" "${ENV_PREFIX}"
 
 export REPO_PATH="${REPO_PATH:-${CLOUD_ROOT}/RLinf}"
 export RLINF_LWD_DATA_ROOT="${RLINF_LWD_DATA_ROOT:-${CLOUD_ROOT}/datasets/rl_data/robotwin_aloha_lwd_split}"
-export RLINF_QAM_LOG_ROOT="${RLINF_QAM_LOG_ROOT:-${CLOUD_ROOT}/checkpoints/rlinf_lwd_qam}"
-export RLINF_QAM_ACTOR_MODEL_PATH="${RLINF_QAM_ACTOR_MODEL_PATH:-${CLOUD_ROOT}/checkpoints/rlinf_pi05_sft_10000/pi05_hammer50_overfit50_10k_v1/checkpoints/global_step_10000}"
+export RLINF_QAM_LOG_ROOT="${RLINF_QAM_LOG_ROOT:-${CLOUD_ROOT}/checkpoints/rlinf_lwd_qam_allstats}"
+export RLINF_QAM_ACTOR_MODEL_PATH="${RLINF_QAM_ACTOR_MODEL_PATH:-${CLOUD_ROOT}/checkpoints/rlinf_pi05_sft_all_stats/pi05_hammer50_overfit50_10k_allstats_v1/checkpoints/global_step_11000}"
 export RLINF_QAM_REFERENCE_MODEL_PATH="${RLINF_QAM_REFERENCE_MODEL_PATH:-${RLINF_QAM_ACTOR_MODEL_PATH}}"
-export RLINF_QAM_CRITIC_MODEL_PATH="${RLINF_QAM_CRITIC_MODEL_PATH:-${CLOUD_ROOT}/checkpoints/rlinf_lwd/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor}"
-export RLINF_PI05_NORM_STATS_PATH="${RLINF_PI05_NORM_STATS_PATH:-${CLOUD_ROOT}/datasets/rl_data/robotwin_aloha_pi05_quick/beat_block_hammer_success_50_train/norm_stats.json}"
+export RLINF_QAM_CRITIC_MODEL_PATH="${RLINF_QAM_CRITIC_MODEL_PATH:-${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor}"
+export RLINF_PI05_NORM_STATS_PATH="${RLINF_PI05_NORM_STATS_PATH:-${RLINF_LWD_DATA_ROOT}/norm_stats.json}"
 export RLINF_SIGLIP_PATH="${RLINF_SIGLIP_PATH:-${CLOUD_ROOT}/weights/pretrained/siglip2-so400m-patch14-224}"
 export RLINF_GEMMA3_PATH="${RLINF_GEMMA3_PATH:-${CLOUD_ROOT}/weights/pretrained/gemma-3-270m}"
 export RLINF_TOKENIZER_PATH="${RLINF_TOKENIZER_PATH:-${RLINF_GEMMA3_PATH}}"
@@ -35,21 +35,21 @@ export PYTHONPATH="${REPO_PATH}:${PYTHONPATH:-}"
 case "${MODE}" in
     smoke)
         CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_smoke"
-        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_qstrong_lq05_smoke"
+        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_smoke"
         MAX_STEPS=10
         SAVE_INTERVAL=10
         AUTO_RESUME=0
         ;;
     probe)
         CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe"
-        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_lq01_gc01"
+        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_probe_lq01_gc01"
         MAX_STEPS=300
         SAVE_INTERVAL=100
         AUTO_RESUME=0
         ;;
     train)
         CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05"
-        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_qstrong_lq05"
+        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_lq05"
         MAX_STEPS=1500
         SAVE_INTERVAL=500
         AUTO_RESUME=1
@@ -110,7 +110,7 @@ require_path "${TOKENIZER_PATH}" "OpenPI tokenizer cache"
 require_path "${RLINF_QAM_ACTOR_MODEL_PATH}/actor/model_state_dict/full_weights.pt" "QAM actor full weights"
 require_path "${RLINF_QAM_REFERENCE_MODEL_PATH}/actor/model_state_dict/full_weights.pt" "QAM reference full weights"
 require_path "${RLINF_QAM_CRITIC_MODEL_PATH}/model_state_dict/full_weights.pt" "QAM critic full weights"
-require_path "${RLINF_LWD_DATA_ROOT}/pi05_norm_stats.json" "LWD QAM norm stats"
+require_path "${RLINF_LWD_DATA_ROOT}/norm_stats.json" "LWD QAM norm stats"
 require_path "${RLINF_PI05_NORM_STATS_PATH}" "OpenPI norm stats"
 
 python -c "from rlinf.algorithms.lwd import qam_vector_field_loss; from rlinf.workers.sft.fsdp_lwd_qam_worker import FSDPLWDQAMWorker; print('lwd qam imports ok')"

@@ -82,6 +82,10 @@ echo "Script mode: ${MODE}"
 ray stop -f || true
 
 python -c "from transformers import AutoTokenizer; from rlinf.data.datasets.lwd.chunk_dataset import LWDChunkDataset; from rlinf.models.embodiment.lwd_critic.lwd_critic_model import LWDCriticModel; print('lwd imports ok')"
+if [ ! -f "${RLINF_LWD_DATA_ROOT}/norm_stats.json" ]; then
+    echo "Missing LWD norm stats: ${RLINF_LWD_DATA_ROOT}/norm_stats.json" >&2
+    exit 1
+fi
 
 HYDRA_ARGS=(
     "--config-name" "${CONFIG_NAME}"

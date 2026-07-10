@@ -6,7 +6,7 @@ defaults:
 
 runner:
   logger:
-    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_qstrong_lq05_smoke
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_smoke
   max_steps: 10
   save_interval: 10
 
