@@ -1,0 +1,16 @@
+# Probe QAM with strong global guidance and a tighter action-gradient cap.
+
+defaults:
+  - robotwin_beat_block_hammer_lwd_qam_openpi_pi05
+  - _self_
+
+runner:
+  logger:
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_probe_lq005_gc005
+  max_steps: 300
+  save_interval: 100
+
+algorithm:
+  lambda_q: 0.05
+  qam_grad_clip: 0.05
+  qam_compare_interval: 5
