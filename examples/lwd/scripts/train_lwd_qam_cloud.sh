@@ -47,6 +47,13 @@ case "${MODE}" in
         SAVE_INTERVAL=100
         AUTO_RESUME=0
         ;;
+    probe_strong)
+        CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_strong"
+        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_probe_lq005_gc01"
+        MAX_STEPS=300
+        SAVE_INTERVAL=100
+        AUTO_RESUME=0
+        ;;
     train)
         CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05"
         EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_lq05"
@@ -55,7 +62,7 @@ case "${MODE}" in
         AUTO_RESUME=1
         ;;
     *)
-        echo "Usage: set RLINF_RUN_MODE to smoke, probe, or train" >&2
+        echo "Usage: set RLINF_RUN_MODE to smoke, probe, probe_strong, or train" >&2
         exit 2
         ;;
 esac
