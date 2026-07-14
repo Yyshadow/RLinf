@@ -42,8 +42,64 @@ case "${MODE}" in
         SAVE_INTERVAL=1000
         AUTO_RESUME=1
         ;;
+    s1_f05_n1_h50_tau06)
+        CONFIG_NAME="robotwin_lwd_critic_cloud_beat_block_s1_f05_n1_h50_tau06"
+        EXPERIMENT_NAME="robotwin_lwd_critic_s1_f05_n1_h50_tau06_8a100"
+        MAX_STEPS=8000
+        SAVE_INTERVAL=1000
+        AUTO_RESUME=1
+        ;;
+    s1_f025_n1_h50_tau06)
+        CONFIG_NAME="robotwin_lwd_critic_cloud_beat_block_s1_f025_n1_h50_tau06"
+        EXPERIMENT_NAME="robotwin_lwd_critic_s1_f025_n1_h50_tau06_8a100"
+        MAX_STEPS=8000
+        SAVE_INTERVAL=1000
+        AUTO_RESUME=1
+        ;;
+    s1_f1_n1_h30_tau06)
+        CONFIG_NAME="robotwin_lwd_critic_cloud_beat_block_s1_f1_n1_h30_tau06"
+        EXPERIMENT_NAME="robotwin_lwd_critic_s1_f1_n1_h30_tau06_8a100"
+        MAX_STEPS=8000
+        SAVE_INTERVAL=1000
+        AUTO_RESUME=1
+        ;;
+    s1_f1_n1_h50_tau09)
+        CONFIG_NAME="robotwin_lwd_critic_cloud_beat_block_s1_f1_n1_h50_tau09"
+        EXPERIMENT_NAME="robotwin_lwd_critic_s1_f1_n1_h50_tau09_8a100"
+        MAX_STEPS=8000
+        SAVE_INTERVAL=1000
+        AUTO_RESUME=1
+        ;;
+    s1_f05_n1_h30_tau06)
+        CONFIG_NAME="robotwin_lwd_critic_cloud_beat_block_s1_f05_n1_h30_tau06"
+        EXPERIMENT_NAME="robotwin_lwd_critic_s1_f05_n1_h30_tau06_8a100"
+        MAX_STEPS=8000
+        SAVE_INTERVAL=1000
+        AUTO_RESUME=1
+        ;;
+    s1_f05_n1_h50_tau09)
+        CONFIG_NAME="robotwin_lwd_critic_cloud_beat_block_s1_f05_n1_h50_tau09"
+        EXPERIMENT_NAME="robotwin_lwd_critic_s1_f05_n1_h50_tau09_8a100"
+        MAX_STEPS=8000
+        SAVE_INTERVAL=1000
+        AUTO_RESUME=1
+        ;;
+    s1_f1_n1_h30_tau09)
+        CONFIG_NAME="robotwin_lwd_critic_cloud_beat_block_s1_f1_n1_h30_tau09"
+        EXPERIMENT_NAME="robotwin_lwd_critic_s1_f1_n1_h30_tau09_8a100"
+        MAX_STEPS=8000
+        SAVE_INTERVAL=1000
+        AUTO_RESUME=1
+        ;;
+    s1_f05_n1_h30_tau09)
+        CONFIG_NAME="robotwin_lwd_critic_cloud_beat_block_s1_f05_n1_h30_tau09"
+        EXPERIMENT_NAME="robotwin_lwd_critic_s1_f05_n1_h30_tau09_8a100"
+        MAX_STEPS=8000
+        SAVE_INTERVAL=1000
+        AUTO_RESUME=1
+        ;;
     *)
-        echo "Usage: $0 [smoke|train]" >&2
+        echo "Usage: set RLINF_RUN_MODE to smoke, train, s1_f05_n1_h50_tau06, s1_f025_n1_h50_tau06, s1_f1_n1_h30_tau06, s1_f1_n1_h50_tau09, s1_f05_n1_h30_tau06, s1_f05_n1_h50_tau09, s1_f1_n1_h30_tau09, or s1_f05_n1_h30_tau09" >&2
         exit 2
         ;;
 esac

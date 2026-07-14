@@ -52,6 +52,7 @@ class OpenPi0Config(Pi0Config):
     noise_params: list = field(
         default_factory=lambda: [0.7, 0.3, 400]
     )  # noise_start, noise_end, noise_anneal_steps
+    fixed_eval_noise_seed: int | None = None
     # noise config for flow-noise
     noise_logvar_range: list = field(
         default_factory=lambda: [0.08, 0.16]
@@ -248,6 +249,34 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             setattr(module, "_fsdp_wrap_name", path_parts[-1] if path_parts else name)
 
         self.torch_compile_enabled = False
+        self._fixed_eval_noise_generators: dict[str, torch.Generator] = {}
+
+    def _fixed_eval_noise_generator(
+        self, device: torch.device | str
+    ) -> torch.Generator | None:
+        seed = self.config.fixed_eval_noise_seed
+        if seed is None:
+            return None
+
+        device = torch.device(device)
+        device_key = str(device)
+        generator = self._fixed_eval_noise_generators.get(device_key)
+        if generator is None:
+            generator = torch.Generator(device=device)
+            generator.manual_seed(int(seed))
+            self._fixed_eval_noise_generators[device_key] = generator
+        return generator
+
+    def sample_noise(self, shape, device):
+        generator = self._fixed_eval_noise_generator(device)
+        if generator is None:
+            return super().sample_noise(shape, device)
+        return torch.randn(
+            shape,
+            dtype=torch.float32,
+            device=device,
+            generator=generator,
+        )
 
     def set_global_step(self, global_step):
         self.global_step = global_step

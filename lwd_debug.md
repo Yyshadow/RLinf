@@ -1481,3 +1481,429 @@ endpoint_saturation_frac 不明显爆炸
 300/500-step checkpoint 的 RoboTwin eval。如果 probe 后 `q_cur_minus_ref` 仍接近
 0，则说明单纯增强 QAM 不够，下一步应优先做 critic gradient finite-difference
 诊断，确认 frozen critic 在 actor endpoint 附近的局部 action gradient 是否可靠。
+
+## 2026-07-13：QAM allstats ODE eval 和 same-seed 对比口径
+
+### ODE 评估结论
+
+为了和原版 OpenPI 推理口径对齐，本轮重新评估 SFT allstats baseline 和当前最优 QAM
+checkpoint 时显式使用：
+
+```yaml
+rollout:
+  model:
+    openpi:
+      noise_method: flow_ode
+      noise_level: 0.0
+```
+
+同时已把 hammer pi0.5 eval 配置默认改成 ODE：
+
+```text
+evaluations/robotwin/robotwin_beat_block_hammer_openpi_pi05_eval.yaml
+```
+
+共同 eval 设置：
+
+```text
+action_exec_horizon = 50
+total_num_envs      = 3
+rollout_epoch       = 10
+fixed reset seeds   = true
+```
+
+结果如下：
+
+| 模型 | checkpoint | 成功数 | 成功率 |
+| --- | --- | ---: | ---: |
+| SFT allstats | `rlinf_pi05_sft_allstats/global_step_11000` | 13/30 | 43.33% |
+| QAM allstats | `probe_lq005_gc005/global_step_300` | 17/30 | 56.67% |
+
+按 seed 拆分：
+
+| seed | SFT | QAM | 变化 |
+| ---: | ---: | ---: | ---: |
+| 100112514 | 6/10 | 7/10 | +1 |
+| 100137506 | 1/10 | 5/10 | +4 |
+| 100175033 | 6/10 | 5/10 | -1 |
+
+输出文件：
+
+```text
+/data/wam_codebase/RLinf/outputs/eval_pi05_hammer50_allstats_gs11000_exec50_n30_ode/eval_episode_metrics.jsonl
+/data/wam_codebase/RLinf/outputs/eval_qam_allstats_probe_lq005_gc005_gs300_exec50_n30_ode/eval_episode_metrics.jsonl
+```
+
+结论：QAM 在 ODE 评估下仍然有净提升，说明之前看到的提升不是只依赖
+`flow_sde/noise_level=0.5` 的采样噪声。收益主要来自 hard seed `100137506`，但
+`100175033` 有轻微退化，所以当前 QAM 是有净收益的小局部修正，不是无损增强。
+
+### flow initial noise 的来源
+
+同一个 RoboTwin seed 固定的是环境初始场景：
+
+```text
+物体初始位置/姿态
+机器人 reset 状态
+相机初始观测
+任务 reset 随机量
+```
+
+但它不直接固定 OpenPI policy 每次 flow 采样的初始 Gaussian noise。当前 RLinf
+OpenPI eval 的调用链是：
+
+```text
+MultiStepRolloutWorker.predict()
+-> OpenPi0ForRLActionPrediction.predict_action_batch()
+-> OpenPi0ForRLActionPrediction.sample_actions()
+-> if noise is None: self.sample_noise(actions_shape, device)
+```
+
+`sample_noise()` 来自 OpenPI PyTorch 父类：
+
+```python
+torch.normal(
+    mean=0.0,
+    std=1.0,
+    size=shape,
+    dtype=torch.float32,
+    device=device,
+)
+```
+
+在当前 hammer pi0.5 eval 中，每次 policy forward 会采：
+
+```text
+[batch_size, action_horizon, action_dim] = [3, 50, 14]
+```
+
+因此 `flow_ode` 的含义是 denoise 过程中不额外加入 SDE 噪声；但初始 `x_1`
+仍是 policy forward 时从 PyTorch RNG 采样的 Gaussian noise。给定同一个初始
+noise 后，ODE 积分过程是确定的；但 eval 重复之间的初始 noise 不一定相同。
+
+### 对比口径修正
+
+后续不要把当前结果称为严格的 paired counterfactual。更准确的说法是：
+
+```text
+same-seed / same-reset-scene comparison
+```
+
+当前对齐的是：
+
+```text
+同一个环境 seed
+同一个初始 reset 场景
+同一批 fixed seeds 上的重复评估
+```
+
+当前没有对齐：
+
+```text
+同一个 flow initial noise
+同一个 action chunk
+同一个中间状态轨迹
+```
+
+因此本轮结果可以客观说明：
+
+```text
+在同一批固定初始场景上，QAM 的闭环成功率高于 SFT。
+```
+
+但不能过度解释为：
+
+```text
+在完全相同的 flow initial noise 和中间状态下，QAM 每一步都优于 SFT。
+```
+
+如果后续要做更严格的 counterfactual 诊断，应显式固定 policy initial noise，例如
+按 `env_seed + rollout_epoch + env_id + chunk_idx` 构造固定 `torch.Generator`，或者
+直接把同一个 noise tensor 同时传给 SFT 和 QAM，然后再比较第一段 action 或闭环结果。
+
+## 2026-07-13：A/B/C 复验后，暂缓新的 QAM ablation
+
+### A. checkpoint sweep
+
+对 `lq005_gc005` 的 `global_step_100/200/300` 做 ODE、fixed-seed 30 次 eval：
+
+| 模型 | 成功数 | 成功率 | 100112514 | 100137506 | 100175033 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SFT `global_step_11000` | 13/30 | 43.33% | 6/10 | 1/10 | 6/10 |
+| QAM `global_step_100` | 12/30 | 40.00% | 8/10 | 3/10 | 1/10 |
+| QAM `global_step_200` | 12/30 | 40.00% | 5/10 | 2/10 | 5/10 |
+| QAM `global_step_300` | 17/30 | 56.67% | 7/10 | 5/10 | 5/10 |
+
+step300 是 30 次 eval 中最优，但 step100/200 不超过 SFT，说明当前 QAM 训练不是
+单调策略改进。
+
+### B. step300 的 60 次 fixed-seed 复验
+
+扩大到 3 个 fixed seeds 各 20 次后：
+
+| 模型 | 成功数 | 成功率 | 100112514 | 100137506 | 100175033 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SFT `global_step_11000` | 28/60 | 46.67% | 16/20 | 2/20 | 10/20 |
+| QAM `global_step_300` | 25/60 | 41.67% | 15/20 | 5/20 | 5/20 |
+
+这说明 30 次 eval 的 `17/30` 是乐观小样本结果。QAM 对 hard seed `100137506`
+有帮助，但显著破坏 `100175033`，整体低于 SFT。
+
+### C. unique seeds
+
+`env.eval.use_fixed_reset_state_ids=false`、ODE、`action_exec_horizon=50`、30 条不同
+reset 场景：
+
+| 模型 | 成功数 | 成功率 |
+| --- | ---: | ---: |
+| SFT `global_step_11000` | 6/30 | 20.00% |
+| QAM `global_step_300` | 6/30 | 20.00% |
+
+unique seeds 上 QAM 没有泛化提升。
+
+### 当前判断
+
+原计划 D 是：
+
+```text
+如果提升稳定，再训练 lq005_gc003 和 lq01_gc005
+```
+
+但 A/B/C 之后，“提升稳定”这个前提不成立。因此本轮暂缓新的 QAM ablation，不继续
+盲目提交 `lq005_gc003` / `lq01_gc005` 云端训练。
+
+下一步应该先做诊断，而不是继续调强度：
+
+1. 固定 policy initial flow noise，做真正的 SFT/QAM counterfactual 对比。
+2. 给 `100137506` 和 `100175033` 输出 SFT/QAM 对比视频，确认 QAM 改善/破坏的具体阶段。
+3. 设计保守门控：只有当 critic 明确认为 current endpoint 高于 reference endpoint 时才允许更新，或者对 current/reference endpoint L2 做更严格 trust region。
+4. 如果再训练 QAM，优先做“少破坏”的约束，而不是单纯调 `lambda_q` / `qam_grad_clip`。
+
+## 2026-07-13：fixed flow initial noise counterfactual 复验
+
+### 改动
+
+在 `OpenPi0Config` 中新增 eval-only 字段：
+
+```text
+fixed_eval_noise_seed: null
+```
+
+默认 `null` 时保持原始 `sample_noise()` 行为。设置为整数时，OpenPI action sampling
+使用固定 `torch.Generator` 生成 flow 初始 Gaussian noise。这样在 SFT/QAM 两次 eval
+配置完全一致时，同一个 `(rollout_epoch, env_id, seed)` 会消费同一串初始 noise。
+
+本轮固定：
+
+```text
+noise_method: flow_ode
+noise_level: 0.0
+fixed_eval_noise_seed: 20260713
+total_num_envs: 3
+rollout_epoch: 20
+action_exec_horizon: 50
+use_fixed_reset_state_ids: true
+```
+
+### 结果
+
+| 模型 | 成功数 | 成功率 | 100112514 | 100137506 | 100175033 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SFT `global_step_11000` | 29/60 | 48.33% | 16/20 | 4/20 | 9/20 |
+| QAM `global_step_300` | 28/60 | 46.67% | 15/20 | 3/20 | 10/20 |
+
+配对翻转：
+
+| 类型 | 数量 |
+| --- | ---: |
+| both success | 19 |
+| both fail | 22 |
+| SFT only | 10 |
+| QAM only | 9 |
+
+### 判断
+
+固定 flow initial noise 后，QAM 仍没有超过 SFT。之前非 fixed-noise 的 n60 里
+QAM 对 `100137506` 的改善更明显，但 fixed-noise 后这个改善消失，说明之前的一部分
+差异来自 policy 初始 Gaussian noise 与闭环随机性的交互。
+
+当前更可靠的结论是：
+
+```text
+QAM lq005_gc005 global_step_300 没有形成稳定的策略改进。
+它会制造一些 SFT fail -> QAM success 的翻转，但也几乎同等数量地制造
+SFT success -> QAM fail 的翻转。
+```
+
+因此接下来不应继续靠统一增大或减小 `lambda_q / qam_grad_clip` 来碰运气。更优先的方向是：
+
+1. 对 fixed-noise 的 SFT-only / QAM-only episode 输出视频和 action diff。
+2. 看 QAM 改动是否集中在关键接触阶段，还是整段 action chunk 漂移。
+3. 训练侧优先做门控/约束，例如只有 critic 明确给出正 advantage 时允许偏离 reference，
+   或者对 current/reference endpoint L2 加 per-state trust region。
+
+## 2026-07-13：critic action-gradient direct-edit 诊断
+
+### 目的
+
+为了确认问题是否来自 QAM 引导链路，先不训练 actor，而是直接测试 critic 的
+`grad_A Q(s,A)` 是否能在闭环中产生正向效果。
+
+脚本：
+
+```text
+examples/lwd/diagnose_critic_gradient_edit.py
+```
+
+输出：
+
+```text
+outputs/lwd_critic_grad_edit_diag_n10
+```
+
+### 方法
+
+每个 seed 从同一个 reset 场景出发，同时跑 4 个变体：
+
+| 变体 | 含义 |
+| --- | --- |
+| `base` | 原始 SFT action |
+| `plus` | 沿 `+grad_A Q(s,A)` 编辑执行前缀 |
+| `minus` | 沿 `-grad_A Q(s,A)` 编辑执行前缀 |
+| `random` | 同等幅度随机方向编辑 |
+
+本轮设置：
+
+```text
+num_cases: 10
+epsilon: 0.01
+action_exec_horizon: 20
+```
+
+### 结果
+
+闭环成功率全部为 0：
+
+| 变体 | 成功数 |
+| --- | ---: |
+| `base` | 0/10 |
+| `plus` | 0/10 |
+| `minus` | 0/10 |
+| `random` | 0/10 |
+
+即时 critic 预测里，`plus` 方向有一定自洽性：
+
+| 范围 | `plus` 正 delta 比例 | `plus > base` | `plus > minus` | `plus > random` |
+| --- | ---: | ---: | ---: | ---: |
+| all chunks | 52.0% | 69.0% | 72.0% | 59.0% |
+| chunks 2-9 | 63.8% | 76.2% | 83.8% | 66.2% |
+| chunks 5-9 | 90.0% | 82.0% | 86.0% | 78.0% |
+
+### 判断
+
+这次结果不能说明 critic 梯度完全无意义。更准确地说：
+
+```text
+critic 梯度能在 critic 自己的局部 Q 预测上产生方向性，
+但在这 10 个 hard cases 中还没有转化为真实闭环成功。
+```
+
+因此下一步不建议直接长训 QAM 或继续盲目扫 `lambda_q / qam_grad_clip`。
+更优先的是做两个更有判别力的实验：
+
+1. 选择包含 SFT 成功和失败的 seed，重复 direct-edit probe，避免全是 hard failure。
+2. 对 `plus` 有明显提高 predicted Q 的片段输出 action diff 和视频，看编辑是否发生在
+   抓锤、接触、敲击等关键阶段，还是只是让 critic 数值变高但物理动作无效。
+
+本次运行在写完结果后退出清理阶段出现 `free(): invalid pointer`。结果文件已经完整落盘，
+该报错更像 RoboTwin/底层库析构问题，不影响本次诊断统计。
+
+## 2026-07-14：same-state action ranking 诊断
+
+### 目的
+
+回答一个更上游的问题：
+
+```text
+在完全相同状态 s 下，critic 给多个 action chunk 的排序，
+是否和真实环境执行后的 success / margin 一致？
+```
+
+如果这项不成立，继续调 `lambda_q / qam_grad_clip` 没有第一性依据。
+
+脚本：
+
+```text
+examples/lwd/diagnose_same_state_action_ranking.py
+```
+
+输出：
+
+```text
+outputs/lwd_same_state_action_ranking_pilot
+```
+
+### 实现口径
+
+- 使用 `same seed + SFT prefix replay` 恢复 canonical state。
+- 4 个 state 的 replay 复现测试全部通过：hammer/block/robot 最大误差为 0，observation hash 一致。
+- 候选：`sft`、`qam_same_noise`、`qam_mirror`、`grad_plus`、`grad_minus`、`random_plus`、`random_minus`。
+- 当前 action 是 qpos chunk，未安全接入 Cartesian IK/controller，因此跳过 `x/y/z ±2mm`，没有用 joint offset 冒充 Cartesian offset。
+- critic 主排序用当前 QAM 配置一致的 `q_mean`，同时保存 `q1/q2/q_min`。
+
+### 运行
+
+```bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+PYTHONPATH=/data/wam_codebase/RLinf:/data/wam_codebase/RoboTwin_RLinf \
+ROBOTWIN_PATH=/data/wam_codebase/RoboTwin_RLinf \
+ROBOTWIN_ASSETS_PATH=/data/wam_codebase/RoboTwin_RLinf \
+EMBODIED_PATH=/data/wam_codebase/RLinf/examples/embodiment \
+REPO_PATH=/data/wam_codebase/RLinf \
+MUJOCO_GL=osmesa PYOPENGL_PLATFORM=osmesa \
+/data/wam_codebase/RLinf/.venv-openpi/bin/python \
+examples/lwd/diagnose_same_state_action_ranking.py \
+  --mode pilot \
+  --num-states 4 \
+  --out-dir outputs/lwd_same_state_action_ranking_pilot
+```
+
+### 结果
+
+| 指标 | 值 |
+| --- | ---: |
+| valid states | 4/4 |
+| success pairwise accuracy | 0.800 |
+| margin pairwise accuracy | 0.449 |
+| margin accuracy 95% CI | [0.171, 0.692] |
+| median Spearman(Q, margin) | 0.054 |
+| Spearman 95% CI | [-0.652, 0.429] |
+| QAM-vs-SFT sign agreement | 0.250 |
+| QAM-vs-mirror sign agreement | 0.333 |
+| grad_plus better than grad_minus | 0.333 |
+| script decision | `INCONCLUSIVE` |
+
+### 判断
+
+critic 对粗粒度 success/fail pair 有一定排序信号，但对 QAM 最需要的连续 margin、
+QAM 改动方向、以及 `grad_plus` vs `grad_minus` 不可靠。
+
+典型例子：
+
+- `seed100112514_q2`：SFT margin `+1.05cm`，QAM margin `+0.038cm`，但 critic 给 QAM 更高 Q。
+- `seed100175033_q2`：SFT 成功且 margin `+0.004cm`，QAM 失败且 margin `-1.19cm`；`grad_plus` 被 critic 明显抬高，但真实失败且 margin `-0.90cm`。
+- `seed100187555_q2`：QAM 相对 SFT 的 Q 略升，但真实 margin 从 `-0.16cm` 降到 `-1.76cm`。
+
+因此，本轮不是 `CRITIC_PASS`。工程结论更接近：
+
+```text
+NO_GO for QAM gradient.
+```
+
+也就是说，当前 critic 也许能做一些 coarse trajectory/state ranking，但还不能作为可靠的
+same-state action-gradient provider。下一步应优先改 critic 数据和监督目标，例如加入
+same-state action contrast、xy margin/contact/grasp stability 辅助目标，或先验证 best-of-K
+candidate ranking，而不是继续放大 QAM actor training。
+
+本次结果完整写盘后仍出现 `free(): invalid pointer`，判断为 RoboTwin/Sapien 清理阶段问题，
+不影响 `summary.json`、`rollout_results.jsonl` 等统计文件。

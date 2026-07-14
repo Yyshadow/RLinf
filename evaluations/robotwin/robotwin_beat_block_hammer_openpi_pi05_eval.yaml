@@ -87,6 +87,8 @@ rollout:
       config_name: pi05_aloha_robotwin
       norm_stats_path: /data/wam_codebase/RLinf/checkpoints/torch/pi05_base_hammer50/physical-intelligence/robotwin/norm_stats.json
       num_images_in_input: 3
-      noise_level: 0.5
+      noise_method: flow_ode
+      noise_level: 0.0
+      fixed_eval_noise_seed: null
       detach_critic_input: true
       train_expert_only: false

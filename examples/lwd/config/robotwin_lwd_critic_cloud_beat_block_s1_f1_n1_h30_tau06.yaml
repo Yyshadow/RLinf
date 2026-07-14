@@ -1,0 +1,25 @@
+# Beat-block-hammer LWD critic ablation:
+# shorter action horizon only, preserving the original data weights and quantile.
+
+defaults:
+  - robotwin_lwd_critic_cloud_beat_block
+  - _self_
+
+runner:
+  logger:
+    experiment_name: robotwin_lwd_critic_s1_f1_n1_h30_tau06_8a100
+
+data:
+  action_horizon: 30
+  train_data_paths:
+    - dataset_path: beat_block_hammer_success_train
+      weight: 1.0
+    - dataset_path: beat_block_hammer_failed_train
+      weight: 1.0
+    - dataset_path: beat_block_hammer_nearmiss_train
+      weight: 1.0
+
+actor:
+  model:
+    action_horizon: 30
+    quantile_tau: 0.6
