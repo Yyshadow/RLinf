@@ -98,6 +98,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--frame-count", type=int, default=5)
     parser.add_argument("--camera-key", type=str, default="cam_high")
+    parser.add_argument("--action-horizon", type=int, default=50)
+    parser.add_argument("--quantile-tau", type=float, default=0.6)
     parser.add_argument("--device", type=str, default="auto", choices=("auto", "cuda", "cpu"))
     parser.add_argument("--precision", type=str, default="bf16", choices=("bf16", "fp32"))
     parser.add_argument(
@@ -160,7 +162,7 @@ def build_model(args: argparse.Namespace, checkpoint_path: Path, device: torch.d
         siglip_path=str(args.siglip_path),
         gemma3_path=str(args.gemma3_path),
         action_dim=14,
-        action_horizon=50,
+        action_horizon=int(getattr(args, "action_horizon", 50)),
         max_token_len=200,
         max_language_len=50,
         critic_expert_variant="gemma_1m",
@@ -168,7 +170,7 @@ def build_model(args: argparse.Namespace, checkpoint_path: Path, device: torch.d
         num_bins=201,
         v_min=-0.1,
         v_max=1.1,
-        quantile_tau=0.6,
+        quantile_tau=float(getattr(args, "quantile_tau", 0.6)),
         action_hidden_dim=256,
         q_hidden_dims=[512, 256, 128],
         num_q_heads=2,
@@ -434,7 +436,7 @@ def main() -> None:
     for label, dataset_name in splits:
         dataset = LWDChunkDataset(
             dataset_path=str(args.data_root / dataset_name),
-            action_horizon=50,
+            action_horizon=int(args.action_horizon),
             norm_stats_path=str(args.data_root / "norm_stats.json"),
             use_quantile_norm=True,
             adapt_to_pi=True,

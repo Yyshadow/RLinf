@@ -1907,3 +1907,110 @@ candidate ranking，而不是继续放大 QAM actor training。
 
 本次结果完整写盘后仍出现 `free(): invalid pointer`，判断为 RoboTwin/Sapien 清理阶段问题，
 不影响 `summary.json`、`rollout_results.jsonl` 等统计文件。
+
+## 2026-07-15：QAM 接入新 critic ablation 的代码适配
+
+### 背景
+
+新的 critic ablation 中有两类值得进入 QAM probe：
+
+| critic | 含义 | 使用原因 |
+| --- | --- | --- |
+| `s1_f1_n1_h50_tau09` | action horizon 仍为 50，IQL expectile/quantile 更偏高价值动作 | 和当前 QAM action chunk 长度完全一致，可直接验证高 tau critic 是否更适合引导 |
+| `s1_f1_n1_h30_tau06` | action horizon 缩短到 30，其他比例保持 baseline | source-paired 诊断里 cross/action-branch 指标更好，但需要 QAM 侧支持 H30 critic |
+
+之前 QAM worker 默认把 actor 生成的完整 50 步 endpoint 直接交给 critic。这个逻辑
+只适配 H50 critic；如果换成 H30 critic，就会把 50 步 action 输入到一个按 30 步训练
+的 action encoder，语义和 tensor shape 都不对。
+
+### 本次代码改动
+
+1. `FSDPLWDQAMWorker` 现在根据 `critic.model.action_horizon` 裁剪 critic 输入：
+
+```text
+actor/reference endpoint: [B, 50, action_dim]
+H50 critic input:        [B, 50, env_action_dim]
+H30 critic input:        [B, 30, env_action_dim]
+```
+
+actor、reference flow 和 QAM loss 仍然按 50 步工作。H30 critic 只决定 critic 看前
+30 步 action；梯度会通过同一个 50 步 endpoint 回传，未被 critic 直接使用的后 20 步
+不会被错误送进 H30 action encoder。
+
+2. 新增两个 QAM probe config：
+
+```text
+examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_h50_tau09_lq005_gc005.yaml
+examples/lwd/config/robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_h30_tau06_lq005_gc005.yaml
+```
+
+两者都沿用当前较稳的 probe 强度：
+
+```yaml
+lambda_q: 0.05
+qam_grad_clip: 0.05
+max_steps: 300
+save_interval: 100
+```
+
+区别只在 critic checkpoint、`critic.model.action_horizon` 和 `critic.model.quantile_tau`。
+
+3. `examples/lwd/scripts/train_lwd_qam_cloud.sh` 新增两个 run mode：
+
+```bash
+RLINF_RUN_MODE=probe_h50_tau09_lq005_gc005
+RLINF_RUN_MODE=probe_h30_tau06_lq005_gc005
+```
+
+脚本会为不同 mode 设置对应的默认 critic checkpoint 路径和不同的
+`experiment_name`。所有结果仍放在同一个 log root：
+
+```text
+${RLINF_QAM_LOG_ROOT}/${experiment_name}/checkpoints
+```
+
+因此不同任务不会互相覆盖 checkpoint，也不需要反复手改 bash 文件。
+
+同时新增两个可直接提交的 hope：
+
+```text
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_h50_tau09_lq005_gc005_8a100.hope
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_h30_tau06_lq005_gc005_8a100.hope
+```
+
+它们分别调用两个很薄的 wrapper：
+
+```text
+examples/lwd/scripts/probe_h50_tau09_lq005_gc005_lwd_qam_cloud.sh
+examples/lwd/scripts/probe_h30_tau06_lq005_gc005_lwd_qam_cloud.sh
+```
+
+wrapper 只固定 `RLINF_RUN_MODE`，公共环境初始化和训练逻辑仍然复用
+`train_lwd_qam_cloud.sh`。这样 hope 的入口是分开的，但不会复制两份完整训练脚本。
+
+### 当前解决的核心问题
+
+1. 解决了 H30 critic 不能正确接入 QAM 的适配问题。
+2. 保持 actor/QAM 训练仍为 50 步，避免把 SFT policy 的 action chunk 语义一起改掉。
+3. 把不同 QAM probe 固化为 run mode 和独立 experiment_name，降低云端 failover/resume
+   时读到被修改 bash 的风险。
+4. 代码里没有新增额外的 algorithm horizon 参数，直接复用已有
+   `critic.model.action_horizon`，避免同一含义在多个位置重复配置。
+
+### 建议提交的下一步实验
+
+先同时提交两个 300-step QAM probe：
+
+```text
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_h50_tau09_lq005_gc005_8a100.hope
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_h30_tau06_lq005_gc005_8a100.hope
+```
+
+训练后优先评估 `global_step_100/200/300`，用 fixed reset state 和 fixed ODE noise
+与 SFT 做 paired evaluation。判断标准仍然不是训练曲线里的 `q_mean`，而是：
+
+```text
+QAM 是否稳定增加成功数；
+QAM-only 是否明显多于 SFT-only；
+视频中 QAM 是否改善抓取/对齐/敲击，而不是只刚好擦过 2cm 阈值。
+```

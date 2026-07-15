@@ -322,6 +322,19 @@ QAM checkpoint：
 | SFT allstats `global_step_11000` | `outputs/eval_pi05_hammer50_allstats_gs11000_exec50_n30_ode` | 13/30 | 43.33% |
 | QAM allstats `lq005_gc005 global_step_300` | `outputs/eval_qam_allstats_probe_lq005_gc005_gs300_exec50_n30_ode` | 17/30 | 56.67% |
 
+补充：2026-07-15 额外测试了同一个最新 SFT checkpoint，只把
+`action_exec_horizon` 从 50 改成 30：
+
+| 模型 | Eval 目录 | 成功数 | 成功率 |
+| --- | --- | ---: | ---: |
+| SFT allstats `global_step_11000`, `exec30` | `outputs/eval_pi05_hammer50_allstats_gs11000_exec30_n30_ode` | 5/30 | 16.67% |
+
+按 seed 拆分：`100112514: 0/10`，`100137506: 4/10`，`100175033: 1/10`。
+因此旧版 `global_step_10000` 上观察到的 `exec30` 优势没有在最新 allstats SFT
+上复现；当前最新 SFT 在同一 ODE/fixed-reset 口径下反而是 `exec50` 明显更好
+（13/30 vs 5/30）。这说明执行步长和 checkpoint/动作时序强相关，不能直接沿用旧
+SFT 的 `exec30` 结论。
+
 按 seed 拆分：
 
 | seed | SFT | QAM | 变化 |

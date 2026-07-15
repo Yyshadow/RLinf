@@ -90,6 +90,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--device", type=str, default="auto", choices=("auto", "cuda", "cpu"))
     parser.add_argument("--precision", type=str, default="bf16", choices=("bf16", "fp32"))
+    parser.add_argument("--action-horizon", type=int, default=50)
+    parser.add_argument("--quantile-tau", type=float, default=0.6)
     parser.add_argument("--points-per-episode", type=int, default=24)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--max-episodes-per-split", type=int, default=0)
@@ -106,10 +108,10 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def build_dataset(data_root: Path, name: str) -> LWDChunkDataset:
+def build_dataset(data_root: Path, name: str, action_horizon: int) -> LWDChunkDataset:
     return LWDChunkDataset(
         dataset_path=str(data_root / name),
-        action_horizon=50,
+        action_horizon=action_horizon,
         norm_stats_path=str(data_root / "norm_stats.json"),
         use_quantile_norm=True,
         adapt_to_pi=True,
@@ -194,8 +196,9 @@ def score_examples(
 
 def collect_pair_points(args: argparse.Namespace) -> list[PairPoint]:
     data_root = args.data_root
-    success_train = build_dataset(data_root, "beat_block_hammer_success_train")
-    success_eval = build_dataset(data_root, "beat_block_hammer_success_eval")
+    action_horizon = int(args.action_horizon)
+    success_train = build_dataset(data_root, "beat_block_hammer_success_train", action_horizon)
+    success_eval = build_dataset(data_root, "beat_block_hammer_success_eval", action_horizon)
     source_map = source_index_map(data_root, success_train, success_eval)
 
     target_specs = [
@@ -204,7 +207,7 @@ def collect_pair_points(args: argparse.Namespace) -> list[PairPoint]:
     ]
     points: list[PairPoint] = []
     for label, dataset_name in target_specs:
-        target_dataset = build_dataset(data_root, dataset_name)
+        target_dataset = build_dataset(data_root, dataset_name, action_horizon)
         rows = load_jsonl(data_root / dataset_name / "meta" / "robotwin_episode_metadata.jsonl")
         if args.max_episodes_per_split > 0:
             rows = rows[: args.max_episodes_per_split]

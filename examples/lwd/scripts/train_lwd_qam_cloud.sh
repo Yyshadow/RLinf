@@ -14,7 +14,6 @@ export RLINF_LWD_DATA_ROOT="${RLINF_LWD_DATA_ROOT:-${CLOUD_ROOT}/datasets/rl_dat
 export RLINF_QAM_LOG_ROOT="${RLINF_QAM_LOG_ROOT:-${CLOUD_ROOT}/checkpoints/rlinf_lwd_qam_allstats}"
 export RLINF_QAM_ACTOR_MODEL_PATH="${RLINF_QAM_ACTOR_MODEL_PATH:-${CLOUD_ROOT}/checkpoints/rlinf_pi05_sft_all_stats/pi05_hammer50_overfit50_10k_allstats_v1/checkpoints/global_step_11000}"
 export RLINF_QAM_REFERENCE_MODEL_PATH="${RLINF_QAM_REFERENCE_MODEL_PATH:-${RLINF_QAM_ACTOR_MODEL_PATH}}"
-export RLINF_QAM_CRITIC_MODEL_PATH="${RLINF_QAM_CRITIC_MODEL_PATH:-${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor}"
 export RLINF_PI05_NORM_STATS_PATH="${RLINF_PI05_NORM_STATS_PATH:-${RLINF_LWD_DATA_ROOT}/norm_stats.json}"
 export RLINF_SIGLIP_PATH="${RLINF_SIGLIP_PATH:-${CLOUD_ROOT}/weights/pretrained/siglip2-so400m-patch14-224}"
 export RLINF_GEMMA3_PATH="${RLINF_GEMMA3_PATH:-${CLOUD_ROOT}/weights/pretrained/gemma-3-270m}"
@@ -31,6 +30,9 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 export RAY_DEDUP_LOGS="${RAY_DEDUP_LOGS:-0}"
 export PYTHONPATH="${REPO_PATH}:${PYTHONPATH:-}"
+
+BASE_CRITIC_MODEL_PATH="${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic/robotwin_lwd_critic_train_8a100/checkpoints/global_step_8000/actor"
+CRITIC_MODEL_PATH_DEFAULT="${BASE_CRITIC_MODEL_PATH}"
 
 case "${MODE}" in
     smoke)
@@ -61,6 +63,22 @@ case "${MODE}" in
         SAVE_INTERVAL=100
         AUTO_RESUME=0
         ;;
+    probe_h50_tau09_lq005_gc005)
+        CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_h50_tau09_lq005_gc005"
+        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_probe_h50_tau09_lq005_gc005"
+        CRITIC_MODEL_PATH_DEFAULT="${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h50_tau09_8a100/global_step_8000/actor"
+        MAX_STEPS=300
+        SAVE_INTERVAL=100
+        AUTO_RESUME=0
+        ;;
+    probe_h30_tau06_lq005_gc005)
+        CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_h30_tau06_lq005_gc005"
+        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_probe_h30_tau06_lq005_gc005"
+        CRITIC_MODEL_PATH_DEFAULT="${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h30_tau06_8a100/global_step_8000/actor"
+        MAX_STEPS=300
+        SAVE_INTERVAL=100
+        AUTO_RESUME=0
+        ;;
     train)
         CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05"
         EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_lq05"
@@ -69,10 +87,12 @@ case "${MODE}" in
         AUTO_RESUME=1
         ;;
     *)
-        echo "Usage: set RLINF_RUN_MODE to smoke, probe, probe_strong, probe_lq005_gc005, or train" >&2
+        echo "Usage: set RLINF_RUN_MODE to smoke, probe, probe_strong, probe_lq005_gc005, probe_h50_tau09_lq005_gc005, probe_h30_tau06_lq005_gc005, or train" >&2
         exit 2
         ;;
 esac
+
+export RLINF_QAM_CRITIC_MODEL_PATH="${RLINF_QAM_CRITIC_MODEL_PATH:-${CRITIC_MODEL_PATH_DEFAULT}}"
 
 find_latest_checkpoint() {
     local ckpt_root="$1"

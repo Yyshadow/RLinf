@@ -1,0 +1,22 @@
+# Probe QAM with the H30, tau=0.6 critic selected from the critic ablation.
+
+defaults:
+  - robotwin_beat_block_hammer_lwd_qam_openpi_pi05
+  - _self_
+
+runner:
+  logger:
+    experiment_name: robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_probe_h30_tau06_lq005_gc005
+  max_steps: 300
+  save_interval: 100
+
+algorithm:
+  lambda_q: 0.05
+  qam_grad_clip: 0.05
+  qam_compare_interval: 5
+
+critic:
+  model:
+    action_horizon: 30
+    quantile_tau: 0.6
+    model_path: ${oc.env:RLINF_QAM_CRITIC_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h30_tau06_8a100/global_step_8000/actor}

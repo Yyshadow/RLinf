@@ -466,7 +466,7 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
         env_action_dim: int,
         clip_action_for_critic: bool,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        critic_endpoint = self._slice_env_action(endpoint, env_action_dim)
+        critic_endpoint = self._slice_critic_action_chunk(endpoint, env_action_dim)
         critic_action = (
             critic_endpoint.clamp(-1.0, 1.0)
             if clip_action_for_critic
@@ -593,12 +593,19 @@ class FSDPLWDQAMWorker(FSDPModelManager, Worker):
             )
         return F.pad(action_chunk, (0, action_dim - current_dim))
 
-    @staticmethod
-    def _slice_env_action(
+    def _slice_critic_action_chunk(
+        self,
         action_chunk: torch.Tensor,
         env_action_dim: int,
     ) -> torch.Tensor:
-        return action_chunk[..., :env_action_dim]
+        critic_horizon = int(
+            getattr(self.cfg.critic.model, "action_horizon", action_chunk.shape[-2])
+        )
+        if critic_horizon > action_chunk.shape[-2]:
+            raise ValueError(
+                "critic.model.action_horizon cannot exceed the policy action horizon."
+            )
+        return action_chunk[:, :critic_horizon, :env_action_dim]
 
     def _policy_velocity(
         self,
