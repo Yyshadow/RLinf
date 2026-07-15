@@ -2044,3 +2044,44 @@ experiment_name: ..._probe_h50_tau09_lq005_gc005_long1000
 
 评估时看 `global_step_200/400/600/800/1000`。如果长训后 paired success 仍然没有
 稳定超过 SFT，就基本可以排除“只是 300 step 不够”这个解释。
+
+## 2026-07-16：TensorBoard 按 experiment 隔离
+
+### 问题
+
+之前 `MetricLogger` 把 TensorBoard 写到：
+
+```text
+${runner.logger.log_path}/tensorboard
+```
+
+但 checkpoint 写到：
+
+```text
+${runner.logger.log_path}/${runner.logger.experiment_name}/checkpoints
+```
+
+因此多个 critic/QAM 实验虽然 checkpoint 分开了，TensorBoard event 和
+`config.yaml` 却会混在同一个 `tensorboard` 目录里。这样后面看曲线时很难判断
+某条曲线到底对应哪个实验，`config.yaml` 也可能被后启动的实验覆盖。
+
+### 修复
+
+现在 TensorBoard 路径改为：
+
+```text
+${runner.logger.log_path}/${runner.logger.experiment_name}/tensorboard
+```
+
+也就是说每个实验的目录结构变成：
+
+```text
+${log_root}/${experiment_name}/checkpoints
+${log_root}/${experiment_name}/tensorboard
+```
+
+checkpoint 和 TensorBoard 会在同一个 experiment 目录下并列保存。之后云端同时跑
+多个 critic/QAM ablation 时，不会再把曲线和配置写进同一个 TensorBoard 目录。
+
+已有旧实验的 TensorBoard 仍然在旧路径下，不会被自动搬迁；这次修复只影响后续新启动
+的训练任务。
