@@ -66,15 +66,23 @@ case "${MODE}" in
     probe_h50_tau09_lq005_gc005)
         CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_h50_tau09_lq005_gc005"
         EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_probe_h50_tau09_lq005_gc005"
-        CRITIC_MODEL_PATH_DEFAULT="${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h50_tau09_8a100/global_step_8000/actor"
+        CRITIC_MODEL_PATH_DEFAULT="${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h50_tau09_8a100/checkpoints/global_step_8000/actor"
         MAX_STEPS=300
         SAVE_INTERVAL=100
+        AUTO_RESUME=0
+        ;;
+    probe_h50_tau09_lq005_gc005_long)
+        CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_h50_tau09_lq005_gc005"
+        EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_probe_h50_tau09_lq005_gc005_long1000"
+        CRITIC_MODEL_PATH_DEFAULT="${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h50_tau09_8a100/checkpoints/global_step_8000/actor"
+        MAX_STEPS=1000
+        SAVE_INTERVAL=200
         AUTO_RESUME=0
         ;;
     probe_h30_tau06_lq005_gc005)
         CONFIG_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_probe_h30_tau06_lq005_gc005"
         EXPERIMENT_NAME="robotwin_beat_block_hammer_lwd_qam_openpi_pi05_allstats_probe_h30_tau06_lq005_gc005"
-        CRITIC_MODEL_PATH_DEFAULT="${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h30_tau06_8a100/global_step_8000/actor"
+        CRITIC_MODEL_PATH_DEFAULT="${CLOUD_ROOT}/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h30_tau06_8a100/checkpoints/global_step_8000/actor"
         MAX_STEPS=300
         SAVE_INTERVAL=100
         AUTO_RESUME=0
@@ -87,7 +95,7 @@ case "${MODE}" in
         AUTO_RESUME=1
         ;;
     *)
-        echo "Usage: set RLINF_RUN_MODE to smoke, probe, probe_strong, probe_lq005_gc005, probe_h50_tau09_lq005_gc005, probe_h30_tau06_lq005_gc005, or train" >&2
+        echo "Usage: set RLINF_RUN_MODE to smoke, probe, probe_strong, probe_lq005_gc005, probe_h50_tau09_lq005_gc005, probe_h50_tau09_lq005_gc005_long, probe_h30_tau06_lq005_gc005, or train" >&2
         exit 2
         ;;
 esac

@@ -1955,6 +1955,19 @@ save_interval: 100
 
 区别只在 critic checkpoint、`critic.model.action_horizon` 和 `critic.model.quantile_tau`。
 
+云端 critic checkpoint 路径使用 RLinf 标准保存结构，QAM 传入的是 `actor` 子目录：
+
+```text
+.../robotwin_lwd_critic_s1_f1_n1_h50_tau09_8a100/checkpoints/global_step_8000/actor
+.../robotwin_lwd_critic_s1_f1_n1_h30_tau06_8a100/checkpoints/global_step_8000/actor
+```
+
+SFT actor/reference checkpoint 使用：
+
+```text
+.../rlinf_pi05_sft_all_stats/pi05_hammer50_overfit50_10k_allstats_v1/checkpoints/global_step_11000
+```
+
 3. `examples/lwd/scripts/train_lwd_qam_cloud.sh` 新增两个 run mode：
 
 ```bash
@@ -2014,3 +2027,20 @@ QAM 是否稳定增加成功数；
 QAM-only 是否明显多于 SFT-only；
 视频中 QAM 是否改善抓取/对齐/敲击，而不是只刚好擦过 2cm 阈值。
 ```
+
+如果要专门排查“300 step 是否训练不够”，额外提交一个长训版：
+
+```text
+examples/lwd/hope/robotwin_lwd_qam_openpi_pi05_probe_h50_tau09_lq005_gc005_long_8a100.hope
+```
+
+它复用 H50 tau09 critic 和同一套 QAM 参数，只改：
+
+```text
+max_steps: 1000
+save_interval: 200
+experiment_name: ..._probe_h50_tau09_lq005_gc005_long1000
+```
+
+评估时看 `global_step_200/400/600/800/1000`。如果长训后 paired success 仍然没有
+稳定超过 SFT，就基本可以排除“只是 300 step 不够”这个解释。

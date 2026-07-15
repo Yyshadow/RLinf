@@ -19,4 +19,4 @@ critic:
   model:
     action_horizon: 30
     quantile_tau: 0.6
-    model_path: ${oc.env:RLINF_QAM_CRITIC_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h30_tau06_8a100/global_step_8000/actor}
+    model_path: ${oc.env:RLINF_QAM_CRITIC_MODEL_PATH,/mnt/dolphinfs/hdd_pool/docker/user/hadoop-uavcvml/yangyi122/checkpoints/rlinf_lwd_critic_test/robotwin_lwd_critic_s1_f1_n1_h30_tau06_8a100/checkpoints/global_step_8000/actor}
